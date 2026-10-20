@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+:root {
+  --bm-bg-page: #f7f2e9;
+  --bm-bg-surface: #ffffff;
+  --bm-bg-brand: #184e45;
+  --bm-color-bg-deep: #12382f;
+  --bm-bg-accent: #e8c17a;
+  --bm-color-bg-mint: #e7f0e9;
+  --bm-text-primary: #252525;
+  --bm-text-brand: #184e45;
+  --bm-text-inverse: #ffffff;
+  --bm-text-muted: #6f7973;
+  --bm-color-text-accent: #b68643;
+  --bm-border-subtle: #dde5de;
+  --bm-input-surface: #fdfbf6;
+  --bm-input-placeholder: #8a958d;
+  --bm-admin-shell: #f8f9f7;
+  --bm-admin-surface-soft: #f4f8f5;
+  --bm-status-warning-bg: #fff2d9;
+  --bm-status-warning-text: #a96b26;
+
+  --bm-radius-input: 12px;
+  --bm-radius-button: 14px;
+  --bm-radius-card: 20px;
+  --bm-radius-section: 27px;
+  --bm-radius-hero: 30px;
+
+  --bm-content-max: 1300px;
+  --background: var(--bm-bg-page);
+  --foreground: var(--bm-text-primary);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-bm-page: var(--bm-bg-page);
+  --color-bm-surface: var(--bm-bg-surface);
+  --color-bm-brand: var(--bm-bg-brand);
+  --color-bm-deep: var(--bm-color-bg-deep);
+  --color-bm-accent: var(--bm-bg-accent);
+  --color-bm-mint: var(--bm-color-bg-mint);
+  --color-bm-text: var(--bm-text-primary);
+  --color-bm-muted: var(--bm-text-muted);
+  --color-bm-gold: var(--bm-color-text-accent);
+  --color-bm-border: var(--bm-border-subtle);
+  --font-sans: var(--font-plus-jakarta-sans);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  background: var(--bm-bg-page);
+}
+
+body {
+  min-height: 100svh;
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-plus-jakarta-sans), Arial, sans-serif;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}

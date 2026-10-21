@@ -16,7 +16,7 @@
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "test": "vitest run",
-    "test:postgres": "vitest run --config vitest.postgres.config.mts",
+    "test:postgres": "node scripts/test/run-postgres-integration.mjs",
     "test:watch": "vitest",
     "test:e2e": "playwright test"
   },
@@ -24,7 +24,6 @@
     "@prisma/adapter-pg": "7.10.1",
     "@prisma/client": "7.10.1",
     "@supabase/supabase-js": "2.118.0",
-    "@upstash/redis": "1.39.0",
     "better-auth": "1.7.12",
     "next": "16.4.2",
     "react": "19.3.0",

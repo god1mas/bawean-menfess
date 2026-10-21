@@ -156,3 +156,23 @@ model ModerationLog {
   @@map("moderation_log")
   @@schema("app_private")
 }
+
+// Internal abuse-control state. Application traffic reaches this table only
+// through app_private.consume_rate_limit(); bawean_app has no direct table
+// privileges. Plaintext client addresses are never persisted. The model is
+// ignored so Prisma Client cannot offer direct CRUD that bypasses the function.
+model RateLimitBucket {
+  scope                String   @db.VarChar(16)
+  identifierKeyVersion Int      @map("identifier_key_version") @db.SmallInt
+  identifierDigest     Bytes    @map("identifier_digest") @db.ByteA
+  windowStartedAt      DateTime @map("window_started_at") @db.Timestamptz(6)
+  requestCount         Int      @map("request_count")
+  expiresAt            DateTime @map("expires_at") @db.Timestamptz(6)
+  updatedAt            DateTime @map("updated_at") @db.Timestamptz(6)
+
+  @@id([scope, identifierKeyVersion, identifierDigest, windowStartedAt], map: "rate_limit_bucket_pkey")
+  @@index([expiresAt], map: "rate_limit_bucket_expires_at_idx")
+  @@ignore
+  @@map("rate_limit_bucket")
+  @@schema("app_private")
+}

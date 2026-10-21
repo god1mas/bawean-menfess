@@ -2,8 +2,8 @@
 
 ## 1. Document status
 
-- Status: D1 requirements baseline
-- Last updated: 21 October 2026
+- Status: D2 requirements baseline
+- Last updated: 22 October 2026
 - Product: Bawean Menfess
 - Purpose: anonymous community confession and message platform for people in
   Bawean and the diaspora
@@ -171,9 +171,10 @@ requirement establishes a lawful purpose and retention policy.
 ## 8. Security and privacy requirements
 
 - Validate all public inputs with Zod on trusted server boundaries.
-- Rate-limit submission, tracking, and authentication endpoints with Upstash
-  Redis.
-- Keep database, Better Auth, Supabase secret/service-role, and Upstash tokens
+- Rate-limit anonymous submission and tracking with the reviewed atomic
+  PostgreSQL function in the private Supabase schema. Authentication throttling
+  remains a separate admin-auth concern.
+- Keep database, Better Auth, Supabase secret/service-role, and all HMAC keys
   server-only.
 - Only Supabase's publishable browser key may use a `NEXT_PUBLIC_` prefix.
 - Enable Row Level Security for every table exposed through the Supabase Data
@@ -207,15 +208,16 @@ requirement establishes a lawful purpose and retention policy.
 - PostgreSQL on Supabase
 - Prisma ORM
 - Better Auth
-- Upstash Redis
+- PostgreSQL-backed rate limiting in Supabase
 - Zod
 - Vitest and Playwright
 - Vercel deployment target
 
 The D1 database architecture and initial schema are deployed. Admin-only
-authentication and authorization are implemented. Public menfess persistence,
-moderation workflows, and deployment remain deferred to their separately
-approved phases.
+authentication and authorization are implemented. D2 implements the local
+public submission and tracking journey; its rate-limit migration and required
+category data remain pending explicit production approval. Moderation workflows
+and application deployment remain deferred to separately approved phases.
 
 ## 11. Design references
 
@@ -254,15 +256,10 @@ The following require product confirmation before affected features are built:
 
 - Final community rules and prohibited-content policy.
 - Moderation rejection reasons, appeals, edits, and resubmission behavior.
-- What a sender sees when a submission is approved or rejected; the public
-  tracking design currently illustrates only three positive stages while the
-  admin design includes a rejected state.
 - Whether the optional Figma pseudonym field is in scope, including its maximum
   length, public display behavior, moderation, and retention.
 - Whether moderators may reverse or reopen a decision; the current proposal is
   forward-only.
-- Exact human-readable tracking-code alphabet, grouping, and length, subject to
-  the minimum entropy in the D1 architecture report.
 - Tracking-credential expiry and recovery.
 - Data retention, deletion, backups, analytics, abuse telemetry, and legal
   privacy text.
@@ -288,3 +285,10 @@ D1.3F and D1.4–D1.6 approvals authorized the database migration and admin-only
 authentication foundation. No category seed, production admin account, public
 submission workflow, Instagram integration, or deployment is authorized by
 those completed tasks.
+
+The D2 master execution approval authorizes local implementation, testing, and
+Git release of public submission and tracking. It does not authorize applying
+the D2 migration, seeding categories, or deploying the application to
+production. For the D2 MVP, the selected tracking code is a 100-bit Crockford
+Base32 code grouped as `BM-XXXX-XXXX-XXXX-XXXX-XXXX`; rejected submissions use
+generic public copy without exposing moderation notes.

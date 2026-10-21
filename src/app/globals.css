@@ -71,3 +71,25 @@ textarea,
 select {
   font: inherit;
 }
+
+button,
+summary,
+a,
+input,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  background: var(--bm-bg-accent);
+  color: var(--bm-text-brand);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

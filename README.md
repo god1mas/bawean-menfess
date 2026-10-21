@@ -10,7 +10,7 @@ connection configuration, and the admin-only Better Auth foundation.
 - Tailwind CSS
 - PostgreSQL on Supabase with Prisma ORM (deployed schema; migration history verified)
 - Better Auth for provisioned administrators only (public signup and social login disabled)
-- Upstash Redis (integration deferred)
+- PostgreSQL-backed fixed-window rate limiting in the private Supabase schema
 - Zod
 - Vitest and Playwright
 - Vercel deployment target
@@ -37,9 +37,9 @@ npm run build
 npm run test:e2e
 ```
 
-`npm run test:postgres` expects an isolated PostgreSQL 17 test database. The
-D1.7 verification provisions a disposable local container and never uses
-production connection credentials.
+`npm run test:postgres` provisions a disposable PostgreSQL 17 container,
+applies the reviewed D1 and pending D2 migrations, and never uses production
+connection credentials.
 
 Playwright requires a browser binary before the first full E2E run:
 
@@ -56,8 +56,9 @@ prisma/                         Prisma schema and deployed migration history
 src/app/                        App Router entry points and global styles
 src/components/brand/           Reusable brand primitives
 src/config/                     Site-level typed configuration
-src/lib/                        Server-only auth, authorization, and database modules
+src/lib/                        Server-only auth, authorization, database, and public API modules
 tests/unit/                     Vitest tests
+tests/integration/              Disposable PostgreSQL 17 integration tests
 tests/e2e/                      Playwright tests
 ```
 
@@ -114,3 +115,5 @@ The functional baseline and unresolved product decisions are recorded in
 - The read-only Supabase `PUBLIC` privilege inventory and Gate D decision are
   recorded in
   [`docs/SUPABASE_PRIVILEGE_AUDIT.md`](docs/SUPABASE_PRIVILEGE_AUDIT.md).
+- The D2 public API, tracking-security, UI, and deployment boundary are
+  recorded in [`docs/D2_IMPLEMENTATION.md`](docs/D2_IMPLEMENTATION.md).

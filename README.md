@@ -1,15 +1,15 @@
 # Bawean Menfess
 
-Anonymous community confession platform for Bawean. This repository currently
-contains the **D0 project foundation only**; product screens and backend service
-integrations are intentionally deferred to later phases.
+Anonymous community confession platform for Bawean. The repository contains
+the verified D0 foundation, the deployed D1 database schema, secure Supabase
+connection configuration, and the admin-only Better Auth foundation.
 
 ## Stack
 
 - Next.js App Router, React, and strict TypeScript
 - Tailwind CSS
-- PostgreSQL on Supabase with Prisma ORM (integration deferred)
-- Better Auth (integration deferred)
+- PostgreSQL on Supabase with Prisma ORM (deployed schema; migration history verified)
+- Better Auth for provisioned administrators only (public signup and social login disabled)
 - Upstash Redis (integration deferred)
 - Zod
 - Vitest and Playwright
@@ -32,9 +32,14 @@ Quality checks:
 npm run lint
 npm run typecheck
 npm test
+npm run test:postgres
 npm run build
 npm run test:e2e
 ```
+
+`npm run test:postgres` expects an isolated PostgreSQL 17 test database. The
+D1.7 verification provisions a disposable local container and never uses
+production connection credentials.
 
 Playwright requires a browser binary before the first full E2E run:
 
@@ -47,12 +52,27 @@ npx playwright install chromium
 ```text
 public/                         Static assets, including the official logo
 docs/                           Product and engineering documentation
+prisma/                         Prisma schema and deployed migration history
 src/app/                        App Router entry points and global styles
 src/components/brand/           Reusable brand primitives
 src/config/                     Site-level typed configuration
+src/lib/                        Server-only auth, authorization, and database modules
 tests/unit/                     Vitest tests
 tests/e2e/                      Playwright tests
 ```
+
+## Administrator authentication
+
+Only pre-provisioned users whose database `auth_user.role` is `admin` can start
+an authenticated session. Public signup, visitor login, social providers, and
+admin provisioning are not implemented. Admin authorization reads the role
+from PostgreSQL for each protected request; browser-provided role values are
+not authoritative. The Better Auth API route exposes only email sign-in,
+sign-out, and a minimized session response.
+
+Set `BETTER_AUTH_SECRET` to a randomly generated value of at least 32 bytes and
+`BETTER_AUTH_URL` to the application's origin. Production requires an HTTPS
+origin. Keep both values server-side and never commit real credentials.
 
 ## Design source
 
@@ -78,10 +98,19 @@ The functional baseline and unresolved product decisions are recorded in
 
 ## Configuration and prerequisites
 
-- Node.js `>=20.9.0` and npm are required.
-- Copy `.env.example` to `.env.local` only when a later phase connects services.
+- Node.js `>=22.0.0` and npm are required.
+- Copy `.env.example` to `.env.local` and keep all real values local or in the
+  deployment secret store.
 - Never commit real credentials. The example values are placeholders only.
 - Resolve the open decisions in `docs/PROJECT_SPECIFICATION.md` before their
   affected behavior is implemented.
-- Supabase, Prisma schema/migrations, Better Auth, Upstash, and Vercel project
-  setup are intentionally not configured in D0.
+- The Supabase database connection plan and Task 1.2 verification are recorded
+  in [`docs/DATABASE_CONNECTION.md`](docs/DATABASE_CONNECTION.md).
+- The Task 1.3A Prisma and Better Auth schema review is recorded in
+  [`docs/PRISMA_SCHEMA.md`](docs/PRISMA_SCHEMA.md).
+- The provisioned least-privilege `bawean_app` runtime role, unapplied object
+  grants, and verification procedure are recorded in
+  [`docs/RUNTIME_DATABASE_ROLE.md`](docs/RUNTIME_DATABASE_ROLE.md).
+- The read-only Supabase `PUBLIC` privilege inventory and Gate D decision are
+  recorded in
+  [`docs/SUPABASE_PRIVILEGE_AUDIT.md`](docs/SUPABASE_PRIVILEGE_AUDIT.md).

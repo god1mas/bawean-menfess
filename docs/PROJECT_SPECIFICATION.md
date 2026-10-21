@@ -2,7 +2,7 @@
 
 ## 1. Document status
 
-- Status: D0 baseline
+- Status: D1 requirements baseline
 - Last updated: 21 October 2026
 - Product: Bawean Menfess
 - Purpose: anonymous community confession and message platform for people in
@@ -20,7 +20,9 @@ during implementation.
 1. People can submit a story without creating a public account.
 2. A sender's identity is not displayed with published content.
 3. Every submission is moderated before publication.
-4. A sender receives a private tracking code after a successful submission.
+4. A sender receives two independent private tracking credentials after a
+   successful submission: a human-readable code and a secure URL token. Only
+   versioned keyed digests of those credentials are persisted.
 5. The experience must remain welcoming, readable, responsive, and accessible.
 6. Secrets, privileged keys, and moderation capabilities must never be exposed
    to the browser.
@@ -31,7 +33,8 @@ during implementation.
 
 - Reads the landing and about content.
 - Submits a menfess anonymously.
-- Tracks a submission using its private tracking code.
+- Tracks a submission using either its private human-readable code or its
+  secure tracking link.
 - Does not require an account in the current design.
 
 ### Administrator
@@ -56,23 +59,30 @@ No additional staff roles or public user accounts are specified yet.
 
 ### Submit menfess
 
-- Categories shown in the design: `Curhat`, `Tanya`, `Apresiasi`, and `Info`.
+- Approved categories: `Confess`, `Curhat`, `Ask BM`, `Connect`, and `Discuss`.
 - Menfess message is required and visually limited to 1,000 characters.
-- Pseudonym is optional.
+- The Figma submit form shows an optional pseudonym, but that field is not part
+  of the original approved functional decisions. It remains unresolved and
+  must not be persisted until product approval.
 - Community-rules/moderation consent is required before submission.
-- A successful request returns a private tracking code.
+- A successful request returns the private human-readable tracking code and
+  secure tracking URL once.
 - The interface must warn senders not to include another person's private
   information.
 - Submission must be validated server-side even when client validation exists.
 
 ### Track menfess
 
-- Accept a private code in the displayed `BM-XXXXXXXX` style.
+- Accept either a human-readable tracking code or a separate secure URL token.
+  Both must be generated cryptographically and stored only as versioned HMAC
+  digests. The short `BM-XXXXXXXX` example in Figma is illustrative; its exact
+  alphabet and length remain unresolved.
 - Do not expose submission content or personal data merely from a tracking
   lookup.
 - Display the current lifecycle state in plain Indonesian.
 - The visual baseline includes `Diterima`, `Dalam moderasi`, and
-  `Dipublikasikan`.
+  `Dipublikasikan`. `Diterima` and `Dalam moderasi` are presentation labels for
+  the single approved `PENDING` state, not additional database states.
 
 ### About
 
@@ -92,10 +102,15 @@ No additional staff roles or public user accounts are specified yet.
 ### Dashboard and moderation
 
 - Show summary counts for pending, approved, published, and rejected items.
-- Show a filterable moderation list with tracking code, category, excerpt, and
-  status.
+- Show a filterable moderation list with an internal identifier, category,
+  excerpt, and status. The two private tracking credentials must never be
+  displayed to administrators or stored in plaintext. The exact identifier
+  presentation remains unresolved.
 - Allow an authorized administrator to inspect a submission before deciding.
 - Moderation and publication actions must be auditable and safe to retry.
+- Instagram publication is manual. Marking a submission as published records
+  the administrator, timestamp, and optional Instagram reference; it does not
+  call the Instagram API.
 - Destructive or irreversible actions require explicit confirmation.
 
 The Figma dashboard contains illustrative data only and must never ship as
@@ -103,33 +118,35 @@ production records.
 
 ## 6. Submission lifecycle
 
-The baseline state model is:
+The approved state model is:
 
 ```text
-received → in_review → approved → published
-                    ↘ rejected
+PENDING → APPROVED → PUBLISHED
+       ↘ REJECTED
 ```
 
-- `received`: accepted by the server and assigned a tracking code.
-- `in_review`: being assessed by a moderator.
-- `approved`: accepted for publication but not yet confirmed as published.
-- `published`: publication has been confirmed.
-- `rejected`: not approved for publication.
+- `PENDING`: accepted by the server and awaiting or undergoing moderation.
+- `APPROVED`: accepted for publication but not yet confirmed as published.
+- `PUBLISHED`: manual Instagram publication has been confirmed.
+- `REJECTED`: not approved for publication.
 
-Exact transition permissions, resubmission behavior, and the public wording for
-`approved` and `rejected` require confirmation before those flows are built.
+The forward-only transitions above are the Task 1.1 recommendation. Reopening,
+resubmission, and reversal behavior require confirmation before implementation.
 
 ## 7. Conceptual data model
 
-This is a conceptual contract, not a Prisma schema.
+This remains the approved conceptual contract. The Task 1.3A executable schema
+and deployed initial migration are documented in
+[`PRISMA_SCHEMA.md`](PRISMA_SCHEMA.md).
 
 ### Menfess
 
 - Internal identifier
-- Public tracking code (unique, non-sequential, unguessable)
+- Human-readable tracking-code HMAC digest and key version
+- Secure tracking-URL-token HMAC digest and key version
 - Category
 - Message
-- Optional pseudonym
+- Optional pseudonym only if the unresolved Figma field is approved
 - Moderation status
 - Submission and update timestamps
 - Optional publication timestamp and publication reference
@@ -161,8 +178,10 @@ requirement establishes a lawful purpose and retention policy.
 - Only Supabase's publishable browser key may use a `NEXT_PUBLIC_` prefix.
 - Enable Row Level Security for every table exposed through the Supabase Data
   API; admin access must still enforce authorization.
-- Tracking codes must have sufficient entropy and must be compared without
-  leaking unrelated records.
+- Both tracking credentials must use a cryptographically secure random
+  generator, be stored only as separate versioned HMAC digests, and never
+  appear in application logs or analytics. URL tokens must not use query
+  strings and require explicit referrer/log-redaction controls.
 - Sanitize or safely render user-authored content; do not interpret it as HTML.
 - Record moderation changes without placing sensitive message content in logs.
 - Apply CSRF, session, cookie, and login throttling protections appropriate to
@@ -193,8 +212,10 @@ requirement establishes a lawful purpose and retention policy.
 - Vitest and Playwright
 - Vercel deployment target
 
-Service connections, schema migrations, authentication, persistence, and
-deployment are deferred beyond D0.
+The D1 database architecture and initial schema are deployed. Admin-only
+authentication and authorization are implemented. Public menfess persistence,
+moderation workflows, and deployment remain deferred to their separately
+approved phases.
 
 ## 11. Design references
 
@@ -236,17 +257,34 @@ The following require product confirmation before affected features are built:
 - What a sender sees when a submission is approved or rejected; the public
   tracking design currently illustrates only three positive stages while the
   admin design includes a rejected state.
-- Whether Instagram publication is manual or API-driven and how publication is
-  confirmed.
-- Tracking-code length, alphabet, expiry, recovery, and brute-force policy.
+- Whether the optional Figma pseudonym field is in scope, including its maximum
+  length, public display behavior, moderation, and retention.
+- Whether moderators may reverse or reopen a decision; the current proposal is
+  forward-only.
+- Exact human-readable tracking-code alphabet, grouping, and length, subject to
+  the minimum entropy in the D1 architecture report.
+- Tracking-credential expiry and recovery.
 - Data retention, deletion, backups, analytics, abuse telemetry, and legal
   privacy text.
 - Administrator provisioning, role granularity, recovery, and MFA policy.
 - Production domains, contact details, Instagram URL, and support workflow.
 - Final route names and metadata beyond the D0 landing placeholder.
 
-## 14. Phase boundary
+## 14. D1 database references
 
-D0 provides tooling, branding, documentation, and verification only. It does
-not authorize implementation of the public screens, database, authentication,
-moderation workflow, tracking API, Instagram integration, or deployment.
+The Task 1.1 database proposal, ERD, conceptual Prisma models, constraints, and
+security review are recorded in
+[`docs/DATABASE_ARCHITECTURE.md`](DATABASE_ARCHITECTURE.md). It is a planning
+artifact only and does not authorize a migration or external service setup.
+
+The verified Supabase connection configuration is recorded in
+[`DATABASE_CONNECTION.md`](DATABASE_CONNECTION.md). The Prisma 7 schema,
+Better Auth model reconciliation, and deployed initial migration are recorded
+in [`PRISMA_SCHEMA.md`](PRISMA_SCHEMA.md).
+
+## 15. Phase boundary
+
+D1.3F and D1.4–D1.6 approvals authorized the database migration and admin-only
+authentication foundation. No category seed, production admin account, public
+submission workflow, Instagram integration, or deployment is authorized by
+those completed tasks.

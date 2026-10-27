@@ -267,7 +267,7 @@ export function ModerationDashboard() {
       <section
         id="dashboard-summary"
         aria-label="Ringkasan menfess"
-        className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
+        className="scroll-mt-24 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
       >
         <StatCard label="Total kiriman" value={data?.stats.total} tone="green" />
         <StatCard label="Menunggu moderasi" value={data?.stats.pending} tone="gold" />
@@ -277,7 +277,7 @@ export function ModerationDashboard() {
 
       <section
         id="moderation-queue"
-        className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(340px,0.7fr)]"
+        className="scroll-mt-24 grid items-start gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(340px,0.7fr)]"
       >
         <div className="overflow-hidden rounded-[22px] border border-bm-border bg-white shadow-sm">
           <div className="border-b border-bm-border p-5 md:p-6">
@@ -524,10 +524,7 @@ function SubmissionDetail({
   acting: boolean;
 }) {
   return (
-    <section
-      id="recent-activity"
-      className="rounded-[22px] border border-bm-border bg-white p-5 shadow-sm md:p-6"
-    >
+    <section className="rounded-[22px] border border-bm-border bg-white p-5 shadow-sm md:p-6">
       <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-bm-gold">
         Ruang tinjau
       </p>
@@ -664,7 +661,10 @@ function RecentActivity({
   loading: boolean;
 }) {
   return (
-    <section className="rounded-[22px] border border-bm-border bg-white p-5 shadow-sm md:p-6">
+    <section
+      id="recent-activity"
+      className="scroll-mt-24 rounded-[22px] border border-bm-border bg-white p-5 shadow-sm md:p-6"
+    >
       <div className="flex items-baseline justify-between gap-3">
         <h2 className="text-lg font-extrabold text-bm-brand">Aktivitas terbaru</h2>
         <span className="text-[11px] font-semibold text-bm-muted">Audit moderasi</span>

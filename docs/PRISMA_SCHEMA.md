@@ -5,15 +5,18 @@
 This document records the D1 Task 1.3A schema design. The approved initial SQL
 migration was deployed during D1.3F-R4 after isolated PostgreSQL 17 testing
 and separate live approval. D1.4–D1.6 added server-side Better Auth and
-admin-only authentication. No seed data or production administrator account
-was created by those tasks.
+admin-only authentication. D2 and the approved five-category seed were later
+verified in production. P6.1 adds an administrator-only moderation dashboard
+and a CLI-only first-admin bootstrap; this implementation has not provisioned
+an administrator or confirmed an application deployment.
 
 ## Prisma and connection configuration
 
 - Prisma CLI and Client are pinned to `7.10.1`.
 - `prisma.config.ts` loads ignored `.env.local` when present, supplies
-  `DIRECT_URL` only to Prisma CLI operations, and enforces `verify-full` with
-  the committed public CA even when the stored URL has no TLS query options.
+  `DIRECT_URL` only to Prisma CLI operations, and configures the native engine
+  with `sslmode=require`, `sslaccept=strict`, the committed public CA, and a
+  finite connection timeout even when the stored URL has no TLS query options.
 - Application code uses `DATABASE_URL` through `@prisma/adapter-pg` `7.10.1`.
 - Runtime TLS uses the committed public Supabase CA with
   `rejectUnauthorized: true`; URL TLS parameters are removed before the
@@ -40,7 +43,9 @@ The generated model and field names are retained. The reviewed adaptations are:
 
 These changes do not alter Better Auth's Prisma-facing field names. D1.4–D1.6
 implemented Better Auth configuration, routes, and session handling.
-Administrator provisioning remains out of scope.
+The `admin:bootstrap-first` CLI implements a separate trusted provisioning
+workflow; it is deliberately not exposed as a web route and has not been run
+against production as part of P6.1.
 
 ## Domain constraints and privacy
 
@@ -55,19 +60,22 @@ Administrator provisioning remains out of scope.
   triggers require the actor's exact `admin` role, match the log to the
   resulting menfess state, require one log for every transition, and reject log
   updates, deletes, and truncation. Server authorization remains mandatory.
-- Optimistic locking uses the nonnegative `Menfess.version` field. The future
-  service transaction must update by `id`, current status, and version, then
-  increment the version and append its log atomically. Database triggers reject
-  version-only changes and require exactly one increment per status change.
+- Optimistic locking uses the nonnegative `Menfess.version` field. The
+  moderation service transaction updates by `id`, current status, and version,
+  then increments the version and appends its log atomically. Database
+  triggers reject version-only changes and require exactly one increment per
+  status change.
 - Manual Instagram publication is represented only by `publishedAt` and an
   optional `publicationReference`; both are restricted to `PUBLISHED` rows and
   no publishing API integration is implied.
 - The migration revokes `app_private` access from `PUBLIC`, `anon`,
   `authenticated`, and `service_role`. A dedicated least-privileged runtime
-  database role and its grants must be finalized before production deployment.
+  database role and its grants were finalized and applied for production.
 
 The five approved categories are defined in the architecture document but are
-not inserted by this migration because Task 1.3A prohibits seeding.
+not inserted by this migration because Task 1.3A prohibited seeding. They were
+seeded later under D2; the current production state is summarized in
+[`DEPLOYMENT_READINESS.md`](DEPLOYMENT_READINESS.md).
 
 ## Unresolved product decisions
 
@@ -84,9 +92,11 @@ The migration SQL is generated from an empty database and then augmented with
 named checks, transition guards, append-only audit enforcement, and
 private-schema privilege revocations. The partial pending-queue index remains
 deferred until query plans show it should replace or complement the general
-status index. The migration must be reviewed and approved before `prisma
-migrate deploy` is allowed against the dedicated Bawean Menfess database. It
-must never be applied to the Sungairujing Marketplace database.
+status index. The D1 migration was approved and applied to the dedicated Bawean Menfess
+database; its expected checksum is recorded in
+[`DEPLOYMENT_READINESS.md`](DEPLOYMENT_READINESS.md). It must remain unchanged.
+Any future migration requires separate review and approval and must never be
+applied to the Sungairujing Marketplace database.
 
 ## D1 Task 1.3B audit corrections
 
@@ -129,8 +139,9 @@ does not create or alter the LOGIN credential. The minimum grant matrix is:
 
 The runtime role must not own these objects, inherit from `postgres` or another
 privileged Supabase role, receive schema `CREATE`, or use the migration
-credential. Public signup remains disabled and administrator provisioning must
-use a later, separately approved owner workflow. The full column list,
+credential. These constraints and grants were finalized for D1 production
+deployment. Public signup remains disabled and administrator provisioning must
+use the trusted CLI workflow with separate operational approval. The full column list,
 password-rotation procedure, Supabase `PUBLIC`-grant limitation, and read-only
 verification queries are documented in
 [`RUNTIME_DATABASE_ROLE.md`](RUNTIME_DATABASE_ROLE.md).

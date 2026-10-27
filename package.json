@@ -15,6 +15,7 @@
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
+    "admin:bootstrap-first": "node scripts/admin/bootstrap-first-admin.mjs",
     "test": "vitest run",
     "test:postgres": "node scripts/test/run-postgres-integration.mjs",
     "test:watch": "vitest",
@@ -26,6 +27,7 @@
     "@supabase/supabase-js": "2.118.0",
     "better-auth": "1.7.12",
     "next": "16.4.2",
+    "pg": "8.23.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "zod": "4.6.7"

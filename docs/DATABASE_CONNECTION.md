@@ -2,6 +2,10 @@
 
 ## 1. Task status
 
+This section and the verification snapshot in §5 preserve the historical
+Task 1.2 state, before D1/D2 were applied. The current read-only verified
+production status is recorded in [`DEPLOYMENT_READINESS.md`](DEPLOYMENT_READINESS.md).
+
 - Task: D1 Task 1.2 — Supabase connection preparation
 - Supabase project: `bawean-menfess`
 - Project reference: `hqupjaaagwpafeuwyixe`
@@ -74,6 +78,14 @@ export default defineConfig({
   },
 });
 ```
+
+The Prisma native PostgreSQL connector uses its own documented TLS URL dialect:
+`prisma.config.ts` converts the stored libpq-style URL to `sslmode=require`,
+`sslaccept=strict`, and `sslcert=certificates/supabase-prod-ca-2021.crt`.
+Together these require encryption and strict validation against the pinned CA;
+the relative path also avoids native-engine path encoding differences on
+Windows. A 30-second connection timeout accommodates the shared session
+pooler's observed connection latency without weakening TLS.
 
 Runtime Prisma Client uses `@prisma/adapter-pg` with `DATABASE_URL`. The
 underlying `pg` pool should start at `max: 1` per serverless instance and use a

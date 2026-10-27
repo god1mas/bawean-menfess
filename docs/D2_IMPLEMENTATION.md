@@ -1,17 +1,14 @@
 # D2 anonymous submission and tracking
 
-## Scope and production boundary
+## Scope and production state
 
 D2 implements the local public submission and tracking journey using the
 existing Supabase PostgreSQL architecture. The explicit D2 master decision is
 Supabase-only and supersedes older planning references to Upstash or Redis.
-No Redis client or infrastructure is used.
-
-The migration
-`20261022130000_add_postgres_rate_limiting` remains unapplied to production.
-Production also has no approved category seed. Until both receive separate
-approval, the category endpoint can legitimately return an empty list and the
-submission UI displays an unavailable state instead of inventing options.
+No Redis client or infrastructure is used. Read-only production verification
+confirmed D1 and D2 are applied, the five approved categories are seeded, and
+the expected six Vercel Production variable names are configured. No confirmed
+production application deployment is recorded.
 
 ## Public routes
 
@@ -85,6 +82,25 @@ Figma frames show older category names and an optional pseudonym. The approved
 functional requirements take precedence: the UI consumes Confess, Curhat,
 Ask BM, Connect, and Discuss from the database, and no pseudonym is collected.
 
+## Moderation and administrator bootstrap
+
+The authenticated administrator dashboard lists, filters, searches, paginates,
+and displays submission details and audit history. Server-side authorization
+re-reads the administrator role for each request. Mutations require a trusted
+Origin, validate strict request schemas, and use a database transaction with
+optimistic version checks. The approved D1 status lifecycle is
+`PENDING → APPROVED/REJECTED` and `APPROVED → PUBLISHED`; unpublish is not
+supported by the schema. Rejection requires an audit reason. Tracking lookups
+continue to expose status only.
+
+The interactive `npm run admin:bootstrap-first` command is a trusted operator
+workflow, not a web route. It uses Better Auth's password hasher, serializes
+concurrent attempts, and refuses if any administrator already exists. It has
+not been run against production as part of this implementation; production
+administrator provisioning requires explicit operational approval. Details
+are in [`ADMINISTRATOR_SETUP.md`](ADMINISTRATOR_SETUP.md) and
+[`MODERATION_WORKFLOW.md`](MODERATION_WORKFLOW.md).
+
 ## Required server environment
 
 - `DATABASE_URL`
@@ -96,4 +112,5 @@ Ask BM, Connect, and Discuss from the database, and no pseudonym is collected.
 - `BETTER_AUTH_URL`
 
 All real values belong in ignored local files or the deployment secret store.
-No D2 secret uses a `NEXT_PUBLIC_` prefix.
+No D2 secret uses a `NEXT_PUBLIC_` prefix. Production variable names were
+verified without retrieving their values; no value is documented here.

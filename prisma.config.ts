@@ -11,19 +11,18 @@ if (existsSync(localEnvironmentPath)) {
 const directUrl = process.env.DIRECT_URL;
 
 function withCertificateVerifiedTls(connectionString: string) {
-  const caPath = join(
-    process.cwd(),
-    "certificates",
-    "supabase-prod-ca-2021.crt",
-  );
+  const caPath = join(process.cwd(), "certificates", "supabase-prod-ca-2021.crt");
 
   if (!existsSync(caPath)) {
     throw new Error("The PostgreSQL CA certificate is missing.");
   }
 
   const url = new URL(connectionString);
-  url.searchParams.set("sslmode", "verify-full");
-  url.searchParams.set("sslrootcert", caPath.replaceAll("\\", "/"));
+  url.searchParams.set("sslmode", "require");
+  url.searchParams.set("sslaccept", "strict");
+  url.searchParams.set("sslcert", "certificates/supabase-prod-ca-2021.crt");
+  url.searchParams.set("connect_timeout", "30");
+  url.searchParams.delete("sslrootcert");
 
   return url.toString();
 }

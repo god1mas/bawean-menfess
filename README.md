@@ -1,8 +1,9 @@
 # Bawean Menfess
 
 Anonymous community confession platform for Bawean. The repository contains
-the verified D0 foundation, the deployed D1 database schema, secure Supabase
-connection configuration, and the admin-only Better Auth foundation.
+the deployed D1 schema and D2 rate-limiting migration, anonymous submission
+and tracking, and a provisioned-admin-only moderation dashboard. No production
+application deployment exists yet.
 
 ## Stack
 
@@ -38,8 +39,9 @@ npm run test:e2e
 ```
 
 `npm run test:postgres` provisions a disposable PostgreSQL 17 container,
-applies the reviewed D1 and pending D2 migrations, and never uses production
-connection credentials.
+applies the reviewed D1 and D2 migrations plus isolated fixtures, and removes
+the container afterwards. It strips production database/auth settings from the
+test process. Docker Desktop must be running.
 
 Playwright requires a browser binary before the first full E2E run:
 
@@ -64,12 +66,14 @@ tests/e2e/                      Playwright tests
 
 ## Administrator authentication
 
-Only pre-provisioned users whose database `auth_user.role` is `admin` can start
-an authenticated session. Public signup, visitor login, social providers, and
-admin provisioning are not implemented. Admin authorization reads the role
-from PostgreSQL for each protected request; browser-provided role values are
-not authoritative. The Better Auth API route exposes only email sign-in,
-sign-out, and a minimized session response.
+Only users whose database `auth_user.role` is `admin` can start an authenticated
+session. Public signup, visitor login, and social providers are disabled.
+Admin authorization reads the role from PostgreSQL for each protected request;
+browser-provided role values are not authoritative. The Better Auth API route
+exposes only email sign-in, sign-out, and a minimized session response. A
+one-time interactive CLI provides offline first-admin bootstrap; review
+[`docs/ADMINISTRATOR_SETUP.md`](docs/ADMINISTRATOR_SETUP.md) and obtain explicit
+operational approval before targeting production.
 
 Set `BETTER_AUTH_SECRET` to a randomly generated value of at least 32 bytes and
 `BETTER_AUTH_URL` to the application's origin. Production requires an HTTPS
@@ -93,7 +97,7 @@ Figma file: <https://www.figma.com/design/l5lV9FukNVG2sIeKoParEg/Untitled>
 
 The global CSS variables mirror the shared Figma palette, radii, typography,
 and layout constants. `public/bawean-menfess-logo.png` is the official
-1280×1280 PNG exported from the supplied Figma design; it was not regenerated.
+1254×1254 PNG and must be preserved as supplied.
 The functional baseline and unresolved product decisions are recorded in
 [`docs/PROJECT_SPECIFICATION.md`](docs/PROJECT_SPECIFICATION.md).
 
@@ -117,3 +121,22 @@ The functional baseline and unresolved product decisions are recorded in
   [`docs/SUPABASE_PRIVILEGE_AUDIT.md`](docs/SUPABASE_PRIVILEGE_AUDIT.md).
 - The D2 public API, tracking-security, UI, and deployment boundary are
   recorded in [`docs/D2_IMPLEMENTATION.md`](docs/D2_IMPLEMENTATION.md).
+- The administrator bootstrap procedure and moderation lifecycle are recorded
+  in [`docs/ADMINISTRATOR_SETUP.md`](docs/ADMINISTRATOR_SETUP.md) and
+  [`docs/MODERATION_WORKFLOW.md`](docs/MODERATION_WORKFLOW.md).
+- Verified production state and remaining release gates are recorded in
+  [`docs/DEPLOYMENT_READINESS.md`](docs/DEPLOYMENT_READINESS.md).
+- The conditionally accepted development-tool vulnerability and mandatory
+  controls are recorded in
+  [`docs/SECURITY_RISK_ACCEPTANCE.md`](docs/SECURITY_RISK_ACCEPTANCE.md).
+- The non-executed first-production deployment, smoke-test, launch-protection,
+  and incident procedures are recorded in
+  [`docs/PRODUCTION_RELEASE_RUNBOOK.md`](docs/PRODUCTION_RELEASE_RUNBOOK.md).
+
+## Production release status
+
+The application has no Vercel deployment and no production administrator. The
+production domain must remain protected during the first deployment and admin
+verification; see the release runbook for the approval-gated sequence. Database
+readiness and configured environment variables do not authorize deployment or
+public launch.

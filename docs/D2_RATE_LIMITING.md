@@ -1,14 +1,15 @@
-# D2 PostgreSQL rate-limiting proposal
+# D2 PostgreSQL rate limiting
 
 ## Status and approval boundary
 
-This document and
+Read-only verification confirmed
 `prisma/migrations/20261022130000_add_postgres_rate_limiting/migration.sql`
-are an unapplied proposal. The migration changes production schema and grants,
-so D2 is paused until it receives explicit approval. It has not been executed,
-committed, or pushed.
+was applied to the dedicated production database and its migration checksum
+matches the reviewed value. D2 has five active production categories. The
+production application deployment itself has not been confirmed. The
+historical policy and security rationale below are retained for operations.
 
-The approved initial migration remains unchanged at SHA-256
+The approved D1 initial migration remains unchanged at SHA-256
 `71fec35ce36addb229654eb83e8779f33db51080ec562fe092a0dd615f60eb8b`.
 
 ## D2.1 security audit finding
@@ -21,24 +22,24 @@ Supabase's public-schema defaults. This exposes migration metadata and permits
 unauthorized mutation of migration history through database roles intended for
 the Data API.
 
-The proposed migration therefore revokes all access to that exact table from
+The migration therefore revokes all access to that exact table from
 `PUBLIC`, `anon`, `authenticated`, `service_role`, and `bawean_app`, then enables
 RLS with no policies. The `postgres` owner used by `DIRECT_URL` retains its
 owner rights, so Prisma Migrate remains compatible. No application table,
 Prisma migration row, or existing production datum is changed by this
-hardening. This live grant change is part of the explicit approval request.
+hardening. This grant hardening is part of the approved D2 migration.
 
 ## Chosen algorithm
 
 Use a fixed window per endpoint scope and HMAC-derived client identifier:
 
-| Scope | Proposed policy | Window |
+| Scope | Applied policy | Window |
 | --- | ---: | ---: |
 | Anonymous submission | 5 requests | 60 minutes |
 | Tracking lookup | 30 requests | 10 minutes |
 
-These values are initial product-policy proposals, not security invariants.
-Changing them currently requires a reviewed function migration. Shared NAT and
+These values are initial product-policy limits, not security invariants.
+Changing them requires a reviewed function migration. Shared NAT and
 mobile carrier users may share a bucket, so production metrics should be used
 to tune them after launch.
 
@@ -57,7 +58,7 @@ that the burst materially weakens protection.
 
 ## Database objects
 
-The proposal adds only:
+The migration adds only:
 
 1. a privilege/RLS hardening change for `public._prisma_migrations`;
 2. `app_private.rate_limit_bucket`, keyed by scope, HMAC key version,

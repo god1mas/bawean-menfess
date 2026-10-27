@@ -10,6 +10,8 @@ const nextConfig: NextConfig = {
     "/admin": ["./certificates/supabase-prod-ca-2021.crt"],
     "/api/admin/session": ["./certificates/supabase-prod-ca-2021.crt"],
     "/api/auth/[...all]": ["./certificates/supabase-prod-ca-2021.crt"],
+    "/api/admin/moderation": ["./certificates/supabase-prod-ca-2021.crt"],
+    "/api/admin/moderation/[id]": ["./certificates/supabase-prod-ca-2021.crt"],
     "/api/public/*": ["./certificates/supabase-prod-ca-2021.crt"],
   },
   turbopack: {

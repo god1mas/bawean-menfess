@@ -235,9 +235,8 @@ Figma: <https://www.figma.com/design/l5lV9FukNVG2sIeKoParEg/Untitled>
 | Admin Dashboard | `10:3` |
 | Admin Login | `10:80` |
 
-Official logo: `public/bawean-menfess-logo.png`, exported from Figma node
-`4:34` at 4× resolution (1280×1280). It must not be regenerated or replaced
-with a look-alike.
+Official logo: `public/bawean-menfess-logo.png`, the supplied 1254×1254 PNG.
+It must not be regenerated or replaced with a look-alike.
 
 ## 12. Verification expectations
 

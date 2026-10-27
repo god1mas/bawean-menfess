@@ -1,4 +1,12 @@
+import { connection } from "next/server";
 import { auth } from "@/lib/auth";
 import { createAuthRouteHandlers } from "@/lib/auth-route";
 
-export const { GET, POST } = createAuthRouteHandlers(auth);
+const handlers = createAuthRouteHandlers(auth);
+
+export async function GET(request: Request) {
+  await connection();
+  return handlers.GET(request);
+}
+
+export const POST = handlers.POST;

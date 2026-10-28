@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "../../src/generated/prisma/client";
@@ -70,13 +70,19 @@ describe("moderation workflow on PostgreSQL 17", () => {
 
   async function submission(label: string) {
     const message = `${prefix} ${label}`;
-    const credentials = await publicRepository.submitMenfess("curhat", message);
-    if (!credentials) throw new Error("Test category is unavailable.");
+    const result = await publicRepository.submitMenfess(
+      "curhat",
+      message,
+      `bmi_${randomBytes(32).toString("base64url")}`,
+    );
+    if (!("credentials" in result)) {
+      throw new Error("Test category is unavailable.");
+    }
     const stored = await owner.menfess.findFirstOrThrow({
       where: { message },
       select: { id: true },
     });
-    return { id: stored.id, credentials };
+    return { id: stored.id, credentials: result.credentials };
   }
 
   it("approves and publishes with matching append-only audit history and tracking state", async () => {
@@ -95,6 +101,8 @@ describe("moderation workflow on PostgreSQL 17", () => {
         actorUserId: adminId,
         action: "PUBLISH",
         expectedVersion: 1,
+        publicationReference:
+          "https://www.instagram.com/p/AbCdEf12345/",
       }),
     ).resolves.toMatchObject({ status: "PUBLISHED", version: 2 });
 
@@ -111,6 +119,34 @@ describe("moderation workflow on PostgreSQL 17", () => {
       "P6 Test Administrator",
     ]);
     expect(detail?.publishedAt).toBeInstanceOf(Date);
+    expect(detail?.publicationReference).toBe(
+      "https://www.instagram.com/p/AbCdEf12345/",
+    );
+    expect(detail?.moderationLogs[0]?.note).toBe(
+      "Referensi Instagram: https://www.instagram.com/p/AbCdEf12345/",
+    );
+  });
+
+  it("records publication removal separately without changing lifecycle status", async () => {
+    const { id } = await submission("publication removal");
+    await moderation.moderate({ id, actorUserId: adminId, action: "APPROVE", expectedVersion: 0 });
+    await moderation.moderate({ id, actorUserId: adminId, action: "PUBLISH", expectedVersion: 1 });
+    await moderation.recordPublicationRemoval({
+      id,
+      actorUserId: adminId,
+      reason: "Affected party request reviewed and Instagram post removed.",
+    });
+
+    const detail = await moderation.detail(id);
+    expect(detail?.status).toBe("PUBLISHED");
+    expect(detail?.version).toBe(2);
+    expect(detail?.publicationRemoval?.reason).toContain("Affected party");
+    await expect(
+      moderation.recordPublicationRemoval({ id, actorUserId: adminId, reason: "duplicate" }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(
+      owner.publicationRemoval.updateMany({ where: { menfessId: id }, data: { reason: "tampered" } }),
+    ).rejects.toThrow();
   });
 
   it("rejects actions that violate the existing status lifecycle", async () => {
@@ -254,5 +290,49 @@ describe("moderation workflow on PostgreSQL 17", () => {
     expect(result.items).toHaveLength(1);
     expect(result.items[0]?.id).toBe(pending.id);
     expect(result.items[0]).not.toHaveProperty("trackingCodeDigest");
+  });
+
+  it("reports approved and published lifecycle counts separately", async () => {
+    const before = await moderation.dashboard();
+    const pending = await submission("dashboard pending");
+    const approved = await submission("dashboard approved");
+    const published = await submission("dashboard published");
+    const rejected = await submission("dashboard rejected");
+
+    await moderation.moderate({
+      id: approved.id,
+      actorUserId: adminId,
+      action: "APPROVE",
+      expectedVersion: 0,
+    });
+    await moderation.moderate({
+      id: published.id,
+      actorUserId: adminId,
+      action: "APPROVE",
+      expectedVersion: 0,
+    });
+    await moderation.moderate({
+      id: published.id,
+      actorUserId: adminId,
+      action: "PUBLISH",
+      expectedVersion: 1,
+    });
+    await moderation.moderate({
+      id: rejected.id,
+      actorUserId: adminId,
+      action: "REJECT",
+      expectedVersion: 0,
+      reason: "Dashboard test rejection.",
+    });
+
+    const after = await moderation.dashboard();
+    expect(after.stats).toEqual({
+      total: before.stats.total + 4,
+      pending: before.stats.pending + 1,
+      approved: before.stats.approved + 1,
+      published: before.stats.published + 1,
+      rejected: before.stats.rejected + 1,
+    });
+    expect(pending.id).toBeTruthy();
   });
 });

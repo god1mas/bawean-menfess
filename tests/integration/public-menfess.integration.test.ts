@@ -35,6 +35,10 @@ describe("anonymous menfess PostgreSQL integration", () => {
   const repository = createPublicMenfessRepository(runtime);
   const testPrefix = `D2 integration ${randomUUID()}`;
 
+  function requestKey() {
+    return `bmi_${randomBytes(32).toString("base64url")}`;
+  }
+
   beforeAll(async () => {
     const identity = await runtime.$queryRaw<
       Array<{ database_name: string; role_name: string; version_num: string }>
@@ -70,11 +74,17 @@ describe("anonymous menfess PostgreSQL integration", () => {
 
   it("atomically inserts PENDING menfess and resolves both private credentials", async () => {
     const message = `${testPrefix} valid submission`;
-    const credentials = await repository.submitMenfess("curhat", message);
+    const submitted = await repository.submitMenfess(
+      "curhat",
+      message,
+      requestKey(),
+    );
 
-    expect(credentials).not.toBeNull();
-    expect(credentials?.trackingCode).toMatch(/^BM-/);
-    expect(credentials?.trackingUrlToken).toMatch(/^bmu_/);
+    expect(submitted.kind).toBe("created");
+    if (!("credentials" in submitted)) throw new Error("Submission failed.");
+    const { credentials } = submitted;
+    expect(credentials.trackingCode).toMatch(/^BM-/);
+    expect(credentials.trackingUrlToken).toMatch(/^bmu_/);
 
     const stored = await owner.menfess.findFirstOrThrow({
       where: { message },
@@ -103,13 +113,70 @@ describe("anonymous menfess PostgreSQL integration", () => {
 
   it("does not insert when a category is missing or inactive", async () => {
     expect(
-      await repository.submitMenfess("not-a-category", `${testPrefix} invalid`),
-    ).toBeNull();
+      await repository.submitMenfess(
+        "not-a-category",
+        `${testPrefix} invalid`,
+        requestKey(),
+      ),
+    ).toEqual({ kind: "category-unavailable" });
     expect(
       await owner.menfess.count({
         where: { message: `${testPrefix} invalid` },
       }),
     ).toBe(0);
+  });
+
+  it("collapses concurrent retries while allowing intentional identical messages", async () => {
+    const message = `${testPrefix} idempotent submission`;
+    const sharedKey = requestKey();
+    const concurrent = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        repository.submitMenfess("curhat", message, sharedKey),
+      ),
+    );
+
+    expect(concurrent.filter((result) => result.kind === "created")).toHaveLength(1);
+    expect(concurrent.filter((result) => result.kind === "replayed")).toHaveLength(7);
+    expect(await owner.menfess.count({ where: { message } })).toBe(1);
+    const firstCredential = concurrent.find(
+      (result) => "credentials" in result,
+    );
+    if (!firstCredential || !("credentials" in firstCredential)) {
+      throw new Error("Concurrent submission returned no credentials.");
+    }
+    expect(
+      concurrent
+        .filter((result) => "credentials" in result)
+        .map((result) =>
+          "credentials" in result ? result.credentials.trackingCode : null,
+        ),
+    ).toEqual(Array(8).fill(firstCredential.credentials.trackingCode));
+
+    const distinct = await repository.submitMenfess(
+      "curhat",
+      message,
+      requestKey(),
+    );
+    expect(distinct.kind).toBe("created");
+    expect(await owner.menfess.count({ where: { message } })).toBe(2);
+  });
+
+  it("replays only inside 24 hours and conflicts at the expiry boundary", async () => {
+    const message = `${testPrefix} replay boundary`;
+    const key = requestKey();
+    expect((await repository.submitMenfess("curhat", message, key)).kind).toBe("created");
+    expect((await repository.submitMenfess("curhat", message, key)).kind).toBe("replayed");
+
+    await owner.$executeRaw`
+      UPDATE app_private.menfess
+      SET submitted_at = clock_timestamp() - INTERVAL '24 hours'
+      WHERE message = ${message}
+    `;
+
+    expect((await repository.submitMenfess("curhat", message, key)).kind).toBe(
+      "idempotency-conflict",
+    );
+    expect(await owner.menfess.count({ where: { message } })).toBe(1);
   });
 
   it("enforces submission limits atomically under concurrency", async () => {
@@ -147,6 +214,38 @@ describe("anonymous menfess PostgreSQL integration", () => {
         AND identifier_digest = ${digest}
     `;
     expect(after[0]).toEqual(stored[0]);
+  });
+
+  it("enforces administrator login limits and recovers in a fresh window", async () => {
+    const digest = randomBytes(32);
+    const decisions = await Promise.all(
+      Array.from({ length: 16 }, () =>
+        repository.consumeRateLimit("admin-login", digest, 1),
+      ),
+    );
+
+    expect(decisions.filter((decision) => decision.allowed)).toHaveLength(5);
+    const saturated = await owner.$queryRaw<Array<{ request_count: number }>>`
+      SELECT request_count
+      FROM app_private.rate_limit_bucket
+      WHERE scope = 'admin-login'
+        AND identifier_key_version = 1
+        AND identifier_digest = ${digest}
+    `;
+    expect(saturated[0]?.request_count).toBe(6);
+
+    await owner.$executeRaw`
+      UPDATE app_private.rate_limit_bucket
+      SET window_started_at = window_started_at - interval '15 minutes',
+          expires_at = expires_at - interval '15 minutes'
+      WHERE scope = 'admin-login'
+        AND identifier_key_version = 1
+        AND identifier_digest = ${digest}
+    `;
+
+    await expect(
+      repository.consumeRateLimit("admin-login", digest, 1),
+    ).resolves.toMatchObject({ allowed: true, remaining: 4 });
   });
 
   it("starts a fresh allowance after an expired fixed window", async () => {
@@ -231,5 +330,82 @@ describe("anonymous menfess PostgreSQL integration", () => {
     await expect(
       runtime.$queryRaw`SELECT * FROM app_private.rate_limit_bucket`,
     ).rejects.toThrow();
+
+    const security = await owner.$queryRaw<
+      Array<{
+        table_owner: string;
+        row_security: boolean;
+        function_owner: string;
+        security_definer: boolean;
+        function_config: string | null;
+        public_execute: boolean;
+        anon_execute: boolean;
+        authenticated_execute: boolean;
+        service_role_execute: boolean;
+        runtime_execute: boolean;
+      }>
+    >`
+      SELECT
+        table_owner.rolname AS table_owner,
+        bucket.relrowsecurity AS row_security,
+        function_owner.rolname AS function_owner,
+        limiter.prosecdef AS security_definer,
+        array_to_string(limiter.proconfig, ',') AS function_config,
+        EXISTS (
+          SELECT 1
+          FROM pg_catalog.aclexplode(
+            COALESCE(
+              limiter.proacl,
+              pg_catalog.acldefault('f', limiter.proowner)
+            )
+          ) AS function_acl
+          WHERE function_acl.grantee = 0
+            AND function_acl.privilege_type = 'EXECUTE'
+        ) AS public_execute,
+        has_function_privilege('anon', limiter.oid, 'EXECUTE') AS anon_execute,
+        has_function_privilege(
+          'authenticated',
+          limiter.oid,
+          'EXECUTE'
+        ) AS authenticated_execute,
+        has_function_privilege(
+          'service_role',
+          limiter.oid,
+          'EXECUTE'
+        ) AS service_role_execute,
+        has_function_privilege(
+          'bawean_app',
+          limiter.oid,
+          'EXECUTE'
+        ) AS runtime_execute
+      FROM pg_catalog.pg_class AS bucket
+      JOIN pg_catalog.pg_namespace AS bucket_namespace
+        ON bucket_namespace.oid = bucket.relnamespace
+      JOIN pg_catalog.pg_roles AS table_owner
+        ON table_owner.oid = bucket.relowner
+      CROSS JOIN pg_catalog.pg_proc AS limiter
+      JOIN pg_catalog.pg_namespace AS function_namespace
+        ON function_namespace.oid = limiter.pronamespace
+      JOIN pg_catalog.pg_roles AS function_owner
+        ON function_owner.oid = limiter.proowner
+      WHERE bucket_namespace.nspname = 'app_private'
+        AND bucket.relname = 'rate_limit_bucket'
+        AND function_namespace.nspname = 'app_private'
+        AND limiter.proname = 'consume_rate_limit'
+        AND pg_catalog.pg_get_function_identity_arguments(limiter.oid)
+          = 'p_scope text, p_identifier_digest bytea, p_identifier_key_version smallint'
+    `;
+    expect(security[0]).toMatchObject({
+      table_owner: "postgres",
+      row_security: true,
+      function_owner: "postgres",
+      security_definer: true,
+      public_execute: false,
+      anon_execute: false,
+      authenticated_execute: false,
+      service_role_execute: false,
+      runtime_execute: true,
+    });
+    expect(security[0]?.function_config).toContain('search_path=""');
   });
 });

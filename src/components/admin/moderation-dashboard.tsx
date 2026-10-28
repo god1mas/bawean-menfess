@@ -1,8 +1,16 @@
 "use client";
 
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  type FormEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { normalizeInstagramPublicationReference } from "@/lib/instagram-publication";
 
 type Status = "PENDING" | "APPROVED" | "REJECTED" | "PUBLISHED";
+type ModerationAction = "APPROVE" | "REJECT" | "PUBLISH" | "REMOVE_PUBLICATION";
 type Category = { slug: string; label: string; isActive: boolean };
 type QueueItem = {
   id: string;
@@ -26,7 +34,8 @@ type DashboardData = {
   stats: {
     total: number;
     pending: number;
-    approvedPublished: number;
+    approved: number;
+    published: number;
     rejected: number;
   };
   categories: Category[];
@@ -43,6 +52,11 @@ type Detail = QueueItem & {
   updatedAt: string;
   publishedAt: string | null;
   publicationReference: string | null;
+  publicationRemoval: {
+    reason: string;
+    removedAt: string;
+    actor: { name: string };
+  } | null;
   trackingCredentials: string;
   moderationLogs: Array<{
     id: string;
@@ -76,6 +90,20 @@ const actionLabels: Record<Activity["action"], string> = {
   MARK_PUBLISHED: "Mempublikasikan",
 };
 
+export async function runModerationActionOnce(
+  lock: { current: boolean },
+  action: ModerationAction,
+  perform: (action: ModerationAction) => Promise<boolean>,
+) {
+  if (lock.current) return false;
+  lock.current = true;
+  try {
+    return await perform(action);
+  } finally {
+    lock.current = false;
+  }
+}
+
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("id-ID", {
     dateStyle: "medium",
@@ -105,7 +133,11 @@ export function ModerationDashboard() {
   const [error, setError] = useState<string>();
   const [actionError, setActionError] = useState<string>();
   const [reason, setReason] = useState("");
+  const [publicationReference, setPublicationReference] = useState("");
   const [acting, setActing] = useState(false);
+  const [confirmation, setConfirmation] = useState<ModerationAction>();
+  const actingRef = useRef(false);
+  const actionTrigger = useRef<HTMLElement | null>(null);
   const query = useMemo(() => {
     const params = new URLSearchParams({
       page: String(page),
@@ -179,8 +211,8 @@ export function ModerationDashboard() {
     setAppliedSearch(nextSearch);
   }
 
-  async function performAction(action: "APPROVE" | "REJECT" | "PUBLISH") {
-    if (!selectedDetail) return;
+  async function performAction(action: ModerationAction) {
+    if (!selectedDetail) return false;
     setActing(true);
     setActionError(undefined);
     try {
@@ -190,12 +222,17 @@ export function ModerationDashboard() {
         body: JSON.stringify({
           action,
           expectedVersion: selectedDetail.version,
-          ...(reason.trim() ? { reason: reason.trim() } : {}),
+          ...(["REJECT", "REMOVE_PUBLICATION"].includes(action) && reason.trim()
+            ? { reason: reason.trim() }
+            : {}),
+          ...(action === "PUBLISH" && publicationReference.trim()
+            ? { publicationReference: publicationReference.trim() }
+            : {}),
         }),
       });
       await readResponse(response);
       setReason("");
-      await reload();
+      setPublicationReference("");
     } catch (reasonValue) {
       setActionError(
         reasonValue instanceof Error
@@ -207,9 +244,42 @@ export function ModerationDashboard() {
       } catch {
         setError("Data belum dapat dimuat ulang.");
       }
+      setActing(false);
+      return false;
+    }
+
+    try {
+      await reload();
+    } catch {
+      setError(
+        "Aksi tersimpan, tetapi data belum dapat dimuat ulang. Muat ulang halaman untuk melihat status terbaru.",
+      );
     } finally {
       setActing(false);
     }
+    return true;
+  }
+
+  function requestConfirmation(action: ModerationAction) {
+    actionTrigger.current = document.activeElement as HTMLElement | null;
+    setActionError(undefined);
+    setConfirmation(action);
+  }
+
+  function closeConfirmation() {
+    if (actingRef.current) return;
+    setConfirmation(undefined);
+    window.setTimeout(() => actionTrigger.current?.focus(), 0);
+  }
+
+  async function confirmAction() {
+    if (!confirmation) return;
+    const succeeded = await runModerationActionOnce(
+      actingRef,
+      confirmation,
+      performAction,
+    );
+    if (succeeded) closeConfirmation();
   }
 
   async function reload() {
@@ -267,11 +337,12 @@ export function ModerationDashboard() {
       <section
         id="dashboard-summary"
         aria-label="Ringkasan menfess"
-        className="scroll-mt-24 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
+        className="scroll-mt-24 grid gap-4 sm:grid-cols-2 xl:grid-cols-5"
       >
         <StatCard label="Total kiriman" value={data?.stats.total} tone="green" />
         <StatCard label="Menunggu moderasi" value={data?.stats.pending} tone="gold" />
-        <StatCard label="Disetujui / tayang" value={data?.stats.approvedPublished} tone="mint" />
+        <StatCard label="Disetujui, belum tayang" value={data?.stats.approved} tone="mint" />
+        <StatCard label="Dipublikasikan" value={data?.stats.published} tone="green" />
         <StatCard label="Ditolak" value={data?.stats.rejected} tone="neutral" />
       </section>
 
@@ -394,6 +465,8 @@ export function ModerationDashboard() {
                       type="button"
                       onClick={() => {
                         setActionError(undefined);
+                        setReason("");
+                        setPublicationReference("");
                         setSelectedId(item.id);
                       }}
                       aria-pressed={selectedId === item.id}
@@ -463,13 +536,24 @@ export function ModerationDashboard() {
             selected={Boolean(selectedId)}
             reason={reason}
             onReasonChange={setReason}
-            onAction={performAction}
+            onAction={requestConfirmation}
             actionError={actionError}
             acting={acting}
           />
           <RecentActivity activities={data?.recentActivity ?? []} loading={loading} />
         </div>
       </section>
+      <ModerationConfirmationDialog
+        action={confirmation}
+        acting={acting}
+        detail={selectedDetail}
+        error={actionError}
+        publicationReference={publicationReference}
+        reason={reason}
+        onCancel={closeConfirmation}
+        onConfirm={() => void confirmAction()}
+        onPublicationReferenceChange={setPublicationReference}
+      />
     </div>
   );
 }
@@ -519,10 +603,14 @@ function SubmissionDetail({
   selected: boolean;
   reason: string;
   onReasonChange: (value: string) => void;
-  onAction: (action: "APPROVE" | "REJECT" | "PUBLISH") => Promise<void>;
+  onAction: (action: ModerationAction) => void;
   actionError?: string;
   acting: boolean;
 }) {
+  const safePublicationReference = normalizeInstagramPublicationReference(
+    detail?.publicationReference ?? undefined,
+  );
+
   return (
     <section className="rounded-[22px] border border-bm-border bg-white p-5 shadow-sm md:p-6">
       <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-bm-gold">
@@ -564,6 +652,19 @@ function SubmissionDetail({
           <p className="mt-3 text-xs leading-5 text-bm-muted">
             {detail.trackingCredentials}
           </p>
+          {safePublicationReference ? (
+            <p className="mt-3 text-xs leading-5 text-bm-muted">
+              Referensi publikasi:{" "}
+              <a
+                className="font-bold text-bm-brand underline"
+                href={safePublicationReference}
+                rel="noreferrer noopener"
+                target="_blank"
+              >
+                Buka posting Instagram
+              </a>
+            </p>
+          ) : null}
 
           <div className="mt-6 border-t border-bm-border pt-5">
             <h3 className="text-sm font-extrabold text-bm-brand">Riwayat moderasi</h3>
@@ -610,7 +711,7 @@ function SubmissionDetail({
                     <button
                       type="button"
                       disabled={acting}
-                      onClick={() => void onAction("APPROVE")}
+                      onClick={() => onAction("APPROVE")}
                       className="rounded-xl bg-bm-brand px-4 py-3 text-sm font-bold text-white hover:bg-bm-deep disabled:opacity-50"
                     >
                       Setujui
@@ -618,7 +719,7 @@ function SubmissionDetail({
                     <button
                       type="button"
                       disabled={acting || !reason.trim()}
-                      onClick={() => void onAction("REJECT")}
+                      onClick={() => onAction("REJECT")}
                       className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-800 hover:bg-red-100 disabled:opacity-50"
                     >
                       Tolak kiriman
@@ -629,7 +730,7 @@ function SubmissionDetail({
                 <button
                   type="button"
                   disabled={acting}
-                  onClick={() => void onAction("PUBLISH")}
+                  onClick={() => onAction("PUBLISH")}
                   className="w-full rounded-xl bg-bm-brand px-4 py-3 text-sm font-bold text-white hover:bg-bm-deep disabled:opacity-50"
                 >
                   Tandai dipublikasikan
@@ -643,13 +744,180 @@ function SubmissionDetail({
             </div>
           ) : null}
           {detail.status === "PUBLISHED" ? (
-            <p className="mt-5 rounded-xl bg-bm-mint p-3 text-xs leading-5 text-bm-brand">
-              Status ini final pada model alur saat ini. Pembatalan publikasi belum didukung.
-            </p>
+            detail.publicationRemoval ? (
+              <div className="mt-5 rounded-xl bg-bm-mint p-3 text-xs leading-5 text-bm-brand">
+                <p className="font-bold">Publikasi telah dicatat sebagai dihapus.</p>
+                <p>{detail.publicationRemoval.actor.name} · {formatDate(detail.publicationRemoval.removedAt)}</p>
+                <p className="mt-1 whitespace-pre-wrap">{detail.publicationRemoval.reason}</p>
+              </div>
+            ) : (
+              <div className="mt-6 space-y-3 border-t border-bm-border pt-5">
+                <label className="block text-xs font-bold text-bm-brand" htmlFor="publication-removal-reason">
+                  Alasan penghapusan publikasi
+                  <textarea id="publication-removal-reason" value={reason} onChange={(event) => onReasonChange(event.target.value)} maxLength={1_000} rows={3} className="mt-2 w-full resize-y rounded-xl border border-bm-border px-3 py-2.5 text-sm font-normal text-bm-text outline-none focus:border-bm-brand focus:ring-2 focus:ring-bm-brand/15" />
+                </label>
+                <button type="button" disabled={acting || !reason.trim()} onClick={() => onAction("REMOVE_PUBLICATION")} className="w-full rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-800 disabled:opacity-50">
+                  Catat penghapusan publikasi
+                </button>
+              </div>
+            )
           ) : null}
         </>
       ) : null}
     </section>
+  );
+}
+
+const confirmationCopy: Record<
+  ModerationAction,
+  { title: string; description: string; confirmLabel: string }
+> = {
+  APPROVE: {
+    title: "Setujui menfess ini?",
+    description:
+      "Kiriman akan berpindah ke status disetujui dan siap menunggu publikasi manual.",
+    confirmLabel: "Ya, setujui",
+  },
+  REJECT: {
+    title: "Tolak menfess ini?",
+    description:
+      "Kiriman akan ditolak secara final pada alur saat ini. Alasan penolakan dicatat dalam audit internal.",
+    confirmLabel: "Ya, tolak",
+  },
+  PUBLISH: {
+    title: "Tandai sebagai dipublikasikan?",
+    description:
+      "Gunakan tindakan ini hanya setelah publikasi manual benar-benar dilakukan di Instagram.",
+    confirmLabel: "Ya, tandai tayang",
+  },
+  REMOVE_PUBLICATION: {
+    title: "Catat penghapusan publikasi?",
+    description:
+      "Gunakan setelah posting Instagram benar-benar dihapus. Status PUBLISHED tetap dipertahankan dan catatan ini tidak dapat diubah.",
+    confirmLabel: "Ya, catat penghapusan",
+  },
+};
+
+export function ModerationConfirmationDialog({
+  action,
+  acting,
+  detail,
+  error,
+  publicationReference,
+  reason,
+  onCancel,
+  onConfirm,
+  onPublicationReferenceChange,
+}: {
+  action?: ModerationAction;
+  acting: boolean;
+  detail?: Detail;
+  error?: string;
+  publicationReference: string;
+  reason: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+  onPublicationReferenceChange: (value: string) => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const element = dialog.current;
+    if (action && element && !element.open) element.showModal();
+  }, [action]);
+
+  if (!action || !detail) return null;
+  const copy = confirmationCopy[action];
+
+  return (
+    <dialog
+      ref={dialog}
+      aria-describedby="moderation-confirmation-description"
+      aria-labelledby="moderation-confirmation-title"
+      className="m-auto w-[min(92vw,34rem)] rounded-[22px] border border-bm-border bg-white p-0 text-bm-text shadow-2xl backdrop:bg-bm-deep/60"
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!acting) onCancel();
+      }}
+    >
+      <div className="p-6 md:p-7">
+        <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-bm-gold">
+          Konfirmasi tindakan
+        </p>
+        <h2
+          id="moderation-confirmation-title"
+          className="mt-2 text-xl font-extrabold text-bm-brand"
+        >
+          {copy.title}
+        </h2>
+        <p
+          id="moderation-confirmation-description"
+          className="mt-3 text-sm leading-6 text-bm-muted"
+        >
+          {copy.description}
+        </p>
+        <div className="mt-5 rounded-xl bg-bm-admin-surface-soft p-4">
+          <p className="text-xs font-bold text-bm-brand">
+            {detail.category.label} · {detail.id.slice(0, 8)}
+          </p>
+          <p className="mt-2 line-clamp-3 whitespace-pre-wrap break-words text-sm leading-6 text-bm-text">
+            {detail.message}
+          </p>
+        </div>
+        {["REJECT", "REMOVE_PUBLICATION"].includes(action) ? (
+          <p className="mt-4 text-xs leading-5 text-bm-muted">
+            Alasan audit: {reason}
+          </p>
+        ) : null}
+        {action === "PUBLISH" ? (
+          <label className="mt-5 block text-xs font-bold text-bm-brand">
+            Tautan posting Instagram{" "}
+            <span className="font-normal text-bm-muted">(opsional)</span>
+            <input
+              autoFocus
+              className="mt-2 h-11 w-full rounded-xl border border-bm-border px-3 text-sm font-normal text-bm-text outline-none focus:border-bm-brand focus:ring-2 focus:ring-bm-brand/15"
+              inputMode="url"
+              maxLength={500}
+              onChange={(event) =>
+                onPublicationReferenceChange(event.target.value)
+              }
+              placeholder="https://www.instagram.com/p/.../"
+              type="url"
+              value={publicationReference}
+            />
+          </label>
+        ) : null}
+        {error ? (
+          <p
+            className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs leading-5 text-red-800"
+            role="alert"
+          >
+            {error}
+          </p>
+        ) : null}
+        <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button
+            autoFocus={action !== "PUBLISH"}
+            className="rounded-xl border border-bm-border px-4 py-3 text-sm font-bold text-bm-brand disabled:opacity-50"
+            disabled={acting}
+            onClick={onCancel}
+            type="button"
+          >
+            Batal
+          </button>
+          <button
+            className={`rounded-xl px-4 py-3 text-sm font-bold text-white disabled:opacity-50 ${
+              ["REJECT", "REMOVE_PUBLICATION"].includes(action) ? "bg-red-700" : "bg-bm-brand"
+            }`}
+            disabled={acting}
+            onClick={onConfirm}
+            type="button"
+          >
+            {acting ? "Menyimpan..." : copy.confirmLabel}
+          </button>
+        </div>
+      </div>
+    </dialog>
   );
 }
 

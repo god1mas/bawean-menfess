@@ -6,6 +6,8 @@ import {
   type PublicApiDependencies,
 } from "../../src/lib/public-api/handlers";
 
+const idempotencyKey = `bmi_${"a".repeat(43)}`;
+
 function dependencies(
   overrides: Partial<PublicApiDependencies> = {},
 ): PublicApiDependencies {
@@ -20,13 +22,16 @@ function dependencies(
       { slug: "curhat", label: "Curhat" },
     ]),
     submitMenfess: vi.fn(async () => ({
-      trackingCode: "BM-0123-4567-89AB-CDEF-GHJK",
-      trackingUrlToken: `bmu_${"a".repeat(43)}`,
-      trackingPath: `/lacak#t=bmu_${"a".repeat(43)}`,
-      trackingCodeDigest: Buffer.alloc(32, 1),
-      trackingCodeKeyVersion: 1,
-      trackingUrlDigest: Buffer.alloc(32, 2),
-      trackingUrlKeyVersion: 1,
+      kind: "created" as const,
+      credentials: {
+        trackingCode: "BM-0123-4567-89AB-CDEF-GHJK",
+        trackingUrlToken: `bmu_${"a".repeat(43)}`,
+        trackingPath: `/lacak#t=bmu_${"a".repeat(43)}`,
+        trackingCodeDigest: Buffer.alloc(32, 1),
+        trackingCodeKeyVersion: 1,
+        trackingUrlDigest: Buffer.alloc(32, 2),
+        trackingUrlKeyVersion: 1,
+      },
     })),
     findPublicStatus: vi.fn(async () => "PENDING" as const),
     ...overrides,
@@ -61,6 +66,7 @@ describe("anonymous submission handler", () => {
         category: "curhat",
         message: "Cerita yang aman untuk dimoderasi.",
         consent: true,
+        idempotencyKey,
       }),
     );
     const body = await response.json();
@@ -74,6 +80,7 @@ describe("anonymous submission handler", () => {
     expect(deps.submitMenfess).toHaveBeenCalledWith(
       "curhat",
       "Cerita yang aman untuk dimoderasi.",
+      idempotencyKey,
     );
   });
 
@@ -84,6 +91,7 @@ describe("anonymous submission handler", () => {
         category: "curhat",
         message: "Tidak boleh menentukan status.",
         consent: true,
+        idempotencyKey,
         status: "PUBLISHED",
       }),
     );
@@ -103,6 +111,7 @@ describe("anonymous submission handler", () => {
           category: "curhat",
           message: "x".repeat(5_000),
           consent: true,
+          idempotencyKey,
         }),
       }),
     );
@@ -114,13 +123,18 @@ describe("anonymous submission handler", () => {
   });
 
   it("does not echo potentially executable user text", async () => {
-    const deps = dependencies({ submitMenfess: vi.fn(async () => null) });
+    const deps = dependencies({
+      submitMenfess: vi.fn(async () => ({
+        kind: "category-unavailable" as const,
+      })),
+    });
     const attack = "<script>alert('xss')</script>";
     const response = await createSubmissionHandler(deps)(
       jsonRequest("/api/public/menfess", {
         category: "missing",
         message: attack,
         consent: true,
+        idempotencyKey,
       }),
     );
 
@@ -140,6 +154,7 @@ describe("anonymous submission handler", () => {
           category: "curhat",
           message: "Pesan valid.",
           consent: true,
+          idempotencyKey,
         }),
       );
 
@@ -172,12 +187,58 @@ describe("anonymous submission handler", () => {
         category: "curhat",
         message: "Pesan valid.",
         consent: true,
+        idempotencyKey,
       }),
     );
 
     expect(response.status).toBe(429);
     expect(response.headers.get("retry-after")).toBe("120");
     expect(deps.submitMenfess).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid idempotency identifier before rate limiting", async () => {
+    const deps = dependencies();
+    const response = await createSubmissionHandler(deps)(
+      jsonRequest("/api/public/menfess", {
+        category: "curhat",
+        message: "Pesan valid.",
+        consent: true,
+        idempotencyKey: "predictable",
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(deps.consumeRateLimit).not.toHaveBeenCalled();
+    expect(deps.submitMenfess).not.toHaveBeenCalled();
+  });
+
+  it("returns the original credentials for a safe request replay", async () => {
+    const deps = dependencies();
+    vi.mocked(deps.submitMenfess).mockResolvedValueOnce({
+      kind: "replayed",
+      credentials: {
+        trackingCode: "BM-0123-4567-89AB-CDEF-GHJK",
+        trackingUrlToken: `bmu_${"a".repeat(43)}`,
+        trackingPath: `/lacak#t=bmu_${"a".repeat(43)}`,
+        trackingCodeDigest: Buffer.alloc(32, 1),
+        trackingCodeKeyVersion: 1,
+        trackingUrlDigest: Buffer.alloc(32, 2),
+        trackingUrlKeyVersion: 1,
+      },
+    });
+    const response = await createSubmissionHandler(deps)(
+      jsonRequest("/api/public/menfess", {
+        category: "curhat",
+        message: "Pesan valid.",
+        consent: true,
+        idempotencyKey,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      trackingCode: "BM-0123-4567-89AB-CDEF-GHJK",
+    });
   });
 });
 

@@ -10,7 +10,7 @@ const submissionId = randomUUID();
 function repository() {
   const value: AdminModerationRepository = {
     dashboard: vi.fn(async () => ({
-      stats: { total: 0, pending: 0, approvedPublished: 0, rejected: 0 },
+      stats: { total: 0, pending: 0, approved: 0, published: 0, rejected: 0 },
       categories: [],
       recentActivity: [],
     })),
@@ -22,6 +22,10 @@ function repository() {
       pageCount: 0,
     })),
     detail: vi.fn(async () => null),
+    recordPublicationRemoval: vi.fn(async (input) => ({
+      menfessId: input.id,
+      removedAt: new Date(0),
+    })),
     moderate: vi.fn(
       async (
         input: Parameters<AdminModerationRepository["moderate"]>[0],
@@ -152,6 +156,100 @@ describe("admin moderation API authorization and validation", () => {
       reason: "Tidak sesuai aturan.",
     });
     expect(response.headers.get("cache-control")).toContain("no-store");
+  });
+
+  it("normalizes safe Instagram publication links and permits omission", async () => {
+    const { instance, data } = handler(admin);
+    const withReference = await instance.action(
+      actionRequest({
+        action: "PUBLISH",
+        expectedVersion: 2,
+        publicationReference:
+          "https://instagram.com/reel/AbCdEf12345/?utm_source=test#fragment",
+      }),
+      submissionId,
+    );
+    const withoutReference = await instance.action(
+      actionRequest({ action: "PUBLISH", expectedVersion: 3 }),
+      submissionId,
+    );
+
+    expect(withReference.status).toBe(200);
+    expect(withoutReference.status).toBe(200);
+    expect(data.moderate).toHaveBeenNthCalledWith(1, {
+      id: submissionId,
+      actorUserId: admin.user.id,
+      action: "PUBLISH",
+      expectedVersion: 2,
+      publicationReference:
+        "https://www.instagram.com/reel/AbCdEf12345/",
+    });
+    expect(data.moderate).toHaveBeenNthCalledWith(2, {
+      id: submissionId,
+      actorUserId: admin.user.id,
+      action: "PUBLISH",
+      expectedVersion: 3,
+    });
+  });
+
+  it("rejects rejection reasons on non-rejection actions", async () => {
+    const { instance, data } = handler(admin);
+    const response = await instance.action(
+      actionRequest({
+        action: "APPROVE",
+        expectedVersion: 1,
+        reason: "Catatan yang tidak semestinya.",
+      }),
+      submissionId,
+    );
+
+    expect(response.status).toBe(400);
+    expect(data.moderate).not.toHaveBeenCalled();
+  });
+
+  it("records a publication removal separately with a mandatory reason", async () => {
+    const { instance, data } = handler(admin);
+    const missing = await instance.action(
+      actionRequest({ action: "REMOVE_PUBLICATION", expectedVersion: 2 }),
+      submissionId,
+    );
+    expect(missing.status).toBe(400);
+
+    const response = await instance.action(
+      actionRequest({
+        action: "REMOVE_PUBLICATION",
+        expectedVersion: 2,
+        reason: "Affected-party report verified.",
+      }),
+      submissionId,
+    );
+    expect(response.status).toBe(200);
+    expect(data.recordPublicationRemoval).toHaveBeenCalledWith({
+      id: submissionId,
+      actorUserId: admin.user.id,
+      reason: "Affected-party report verified.",
+    });
+    expect(data.moderate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "javascript:alert(1)",
+    "http://www.instagram.com/p/AbCdEf12345/",
+    "https://instagram.example/p/AbCdEf12345/",
+    "https://www.instagram.com/accounts/login/",
+  ])("rejects unsafe publication reference %s", async (publicationReference) => {
+    const { instance, data } = handler(admin);
+    const response = await instance.action(
+      actionRequest({
+        action: "PUBLISH",
+        expectedVersion: 1,
+        publicationReference,
+      }),
+      submissionId,
+    );
+
+    expect(response.status).toBe(400);
+    expect(data.moderate).not.toHaveBeenCalled();
   });
 
   it("validates pagination and filters before database access", async () => {

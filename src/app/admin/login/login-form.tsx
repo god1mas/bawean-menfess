@@ -1,15 +1,58 @@
 "use client";
 
-import { useActionState } from "react";
-import { signInAction, type LoginState } from "@/app/admin/login/actions";
-
-const initialState: LoginState = {};
+import { type FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
+import { ClientRequestError, requestJson } from "@/lib/client-json";
 
 export function LoginForm() {
-  const [state, action, pending] = useActionState(signInAction, initialState);
+  const router = useRouter();
+  const [error, setError] = useState<string>();
+  const [pending, setPending] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const email = form.get("email");
+    const password = form.get("password");
+    const genericError = "Email atau kata sandi tidak valid.";
+
+    if (typeof email !== "string" || typeof password !== "string") {
+      setError(genericError);
+      return;
+    }
+
+    setPending(true);
+    setError(undefined);
+
+    try {
+      await requestJson<{ ok: true }>(
+        "/api/auth/sign-in/email",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email.trim(), password }),
+        },
+        {
+          fallbackMessage: genericError,
+          timeoutMessage: "Proses masuk terlalu lama. Coba lagi.",
+        },
+      );
+      router.replace("/admin");
+      router.refresh();
+    } catch (reason) {
+      setError(
+        reason instanceof ClientRequestError && reason.status === 429
+          ? "Terlalu banyak percobaan masuk. Coba lagi setelah 15 menit."
+          : reason instanceof Error
+            ? reason.message
+            : genericError,
+      );
+      setPending(false);
+    }
+  }
 
   return (
-    <form action={action} className="flex flex-col gap-4">
+    <form onSubmit={submit} className="flex flex-col gap-4">
       <label className="flex flex-col gap-2 text-sm font-semibold text-bm-text">
         Email
         <input
@@ -30,9 +73,9 @@ export function LoginForm() {
           type="password"
         />
       </label>
-      {state.error ? (
+      {error ? (
         <p aria-live="polite" className="text-sm text-red-700" role="alert">
-          {state.error}
+          {error}
         </p>
       ) : null}
       <button

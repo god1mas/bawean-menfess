@@ -35,6 +35,11 @@ async function sanitizeResponse(
         ? "Email atau kata sandi tidak valid."
         : "Permintaan autentikasi tidak dapat diproses.";
 
+    if (response.status === 429) {
+      const retryAfter = response.headers.get("x-retry-after");
+      if (retryAfter) headers.set("Retry-After", retryAfter);
+    }
+
     return noStore(
       new Response(JSON.stringify({ message }), {
         status: response.status,

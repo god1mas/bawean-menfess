@@ -37,6 +37,7 @@ Use a fixed window per endpoint scope and HMAC-derived client identifier:
 | --- | ---: | ---: |
 | Anonymous submission | 5 requests | 60 minutes |
 | Tracking lookup | 30 requests | 10 minutes |
+| Administrator email/password sign-in | 5 attempts | 15 minutes |
 
 These values are initial product-policy limits, not security invariants.
 Changing them requires a reviewed function migration. Shared NAT and
@@ -114,8 +115,16 @@ with a generic `503` and must not perform the protected operation.
 - The private schema is not exposed through Supabase Data API, and Supabase
   `anon`/`authenticated` roles retain no schema usage.
 
-The function accepts only the two compiled scopes. Callers cannot supply their
-own limit or window duration to weaken enforcement.
+The D2 function initially accepts only the two public scopes. The local P7
+migration candidate extends the existing constraint and function with the
+compiled `admin-login` scope while preserving the same ownership, direct-table
+denials, and exact function grant. Callers cannot supply their own limit or
+window duration to weaken enforcement.
+
+The P7 migration uses `CREATE OR REPLACE FUNCTION`, so it must be run by the
+existing function owner (`postgres`). Post-migration verification must confirm
+that the owner is still `postgres`, `prosecdef` remains true, the function-local
+`search_path` is empty, and only `bawean_app` plus the owner can execute it.
 
 ## Client-address trust boundary
 

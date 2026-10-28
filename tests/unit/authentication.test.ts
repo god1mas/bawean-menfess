@@ -7,6 +7,7 @@ import {
   validateAuthEnvironment,
 } from "../../src/lib/auth-options";
 import { createAuthRouteHandlers } from "../../src/lib/auth-route";
+import { adminLoginRateLimit } from "../../src/lib/admin-login-rate-limit";
 
 const testEnvironment = {
   BETTER_AUTH_SECRET: randomBytes(32).toString("base64url"),
@@ -81,6 +82,7 @@ function signInRequest(email: string, password: string) {
     headers: {
       "Content-Type": "application/json",
       Origin: "http://localhost:3000",
+      "x-vercel-forwarded-for": "198.51.100.42",
     },
     body: JSON.stringify({ email, password }),
   });
@@ -219,6 +221,105 @@ describe("admin-only Better Auth configuration", () => {
     expect(body).toEqual({ ok: true });
     expect(response.headers.get("set-cookie")).toContain("session_token");
     expect(response.headers.get("cache-control")).toContain("no-store");
+  });
+
+  it("throttles the actual sign-in route durably and recovers after its window", async () => {
+    let now = 0;
+    const buckets = new Map<string, { count: number; startedAt: number }>();
+    const database: MemoryDB = {
+      user: [],
+      session: [],
+      account: [],
+      verification: [],
+    };
+    const adapter = memoryAdapter(database);
+    const options = createAuthOptions(testEnvironment, adapter, [], {
+      enabled: true,
+      customRules: {
+        "/sign-in/email": adminLoginRateLimit,
+        "*": false,
+      },
+      customStorage: {
+        consume: async (key, rule) => {
+          const current = buckets.get(key);
+          const expired =
+            !current || now - current.startedAt >= rule.window * 1_000;
+          const bucket = expired
+            ? { count: 0, startedAt: now }
+            : current;
+          if (bucket.count >= rule.max) {
+            return {
+              allowed: false,
+              retryAfter: Math.ceil(
+                (bucket.startedAt + rule.window * 1_000 - now) / 1_000,
+              ),
+            };
+          }
+          bucket.count += 1;
+          buckets.set(key, bucket);
+          return { allowed: true, retryAfter: null };
+        },
+      },
+    });
+    const provisioner = betterAuth({
+      ...options,
+      rateLimit: { enabled: false },
+      databaseHooks: undefined,
+      emailAndPassword: {
+        ...options.emailAndPassword,
+        enabled: true,
+        disableSignUp: false,
+      },
+    });
+    const auth = betterAuth(options);
+    const routes = createAuthRouteHandlers(auth);
+    const provisionResponse = await provisioner.handler(
+      new Request("http://localhost:3000/api/auth/sign-up/email", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "http://localhost:3000",
+        },
+        body: JSON.stringify({
+          name: "Limited Admin",
+          email: "limited@example.test",
+          password: adminPassword,
+        }),
+      }),
+    );
+    expect(provisionResponse.status).toBe(200);
+    const user = database.user?.find(
+      (record) => record.email === "limited@example.test",
+    );
+    expect(user).toBeDefined();
+    if (!user) throw new Error("Provisioning failed.");
+    user.role = "admin";
+
+    for (let attempt = 0; attempt < adminLoginRateLimit.max; attempt += 1) {
+      const response = await routes.POST(
+        signInRequest("limited@example.test", invalidPassword),
+      );
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual({
+        message: "Email atau kata sandi tidak valid.",
+      });
+    }
+
+    const throttled = await routes.POST(
+      signInRequest("unknown@example.test", invalidPassword),
+    );
+    expect(throttled.status).toBe(429);
+    expect(await throttled.json()).toEqual({
+      message: "Email atau kata sandi tidak valid.",
+    });
+    expect(throttled.headers.get("retry-after")).toBeTruthy();
+
+    now += (adminLoginRateLimit.window + 1) * 1_000;
+    const recovered = await routes.POST(
+      signInRequest("limited@example.test", adminPassword),
+    );
+    expect(recovered.status).toBe(200);
+    expect(recovered.headers.get("set-cookie")).toContain("session_token");
   });
 
   it("denies provisioned non-admin users and keeps session responses minimal", async () => {

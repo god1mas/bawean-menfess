@@ -11,8 +11,12 @@ export function PublicFooter() {
         <Link href={"/tentang" as Route} className="hover:text-bm-brand">
           Tentang
         </Link>
-        <span>Privasi dijaga</span>
-        <span>Dimoderasi</span>
+        <Link href={"/aturan" as Route} className="hover:text-bm-brand">
+          Aturan komunitas
+        </Link>
+        <Link href={"/privasi" as Route} className="hover:text-bm-brand">
+          Privasi
+        </Link>
       </nav>
     </footer>
   );

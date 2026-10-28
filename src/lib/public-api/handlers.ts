@@ -4,7 +4,7 @@ import type {
   PublicMenfessStatus,
   RateLimitDecision,
   RateLimitScope,
-  TrackingCredentialPair,
+  SubmissionRepositoryResult,
 } from "@/lib/public-api/contracts";
 import {
   submissionPayloadSchema,
@@ -32,7 +32,8 @@ export type PublicApiDependencies = {
   submitMenfess: (
     categorySlug: string,
     message: string,
-  ) => Promise<TrackingCredentialPair | null>;
+    idempotencyKey: string,
+  ) => Promise<SubmissionRepositoryResult>;
   findPublicStatus: (
     rawCredential: string,
   ) => Promise<PublicMenfessStatus | null>;
@@ -213,12 +214,13 @@ export function createSubmissionHandler(dependencies: PublicApiDependencies) {
         return rateLimitResponse(rateLimit);
       }
 
-      const credentials = await dependencies.submitMenfess(
+      const submission = await dependencies.submitMenfess(
         parsed.data.category,
         parsed.data.message,
+        parsed.data.idempotencyKey,
       );
 
-      if (!credentials) {
+      if (submission.kind === "category-unavailable") {
         return json(
           {
             code: "CATEGORY_UNAVAILABLE",
@@ -229,12 +231,29 @@ export function createSubmissionHandler(dependencies: PublicApiDependencies) {
         );
       }
 
+      if (submission.kind === "idempotency-conflict") {
+        return json(
+          {
+            code: "IDEMPOTENCY_CONFLICT",
+            message:
+              "Permintaan ini sudah digunakan untuk kiriman yang berbeda. Muat ulang halaman lalu coba lagi.",
+          },
+          { status: 409 },
+        );
+      }
+
+      if (!("credentials" in submission)) {
+        throw new Error("Unexpected submission result.");
+      }
+
+      const { credentials } = submission;
+
       return json(
         {
           trackingCode: credentials.trackingCode,
           trackingPath: credentials.trackingPath,
         },
-        { status: 201 },
+        { status: submission.kind === "created" ? 201 : 200 },
       );
     } catch (error) {
       logRequestFailure("submission", error);

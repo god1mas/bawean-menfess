@@ -6,10 +6,10 @@ import type {
   PublicMenfessStatus,
   RateLimitDecision,
   RateLimitScope,
-  TrackingCredentialPair,
+  SubmissionRepositoryResult,
 } from "@/lib/public-api/contracts";
 import {
-  createTrackingCredentialPair,
+  createTrackingCredentialPairForIdempotency,
   digestCredential,
   loadD2Secrets,
   parseTrackingCredential,
@@ -33,13 +33,21 @@ function isUniqueViolation(error: unknown) {
 
   const candidate = error as {
     code?: string;
-    meta?: { code?: string };
+    meta?: {
+      code?: string;
+      driverAdapterError?: {
+        cause?: { originalCode?: string };
+      };
+    };
   };
+  const postgresCode =
+    candidate.meta?.code ??
+    candidate.meta?.driverAdapterError?.cause?.originalCode;
 
   return (
     candidate.code === "P2002" ||
     candidate.code === "23505" ||
-    (candidate.code === "P2010" && candidate.meta?.code === "23505")
+    (candidate.code === "P2010" && postgresCode === "23505")
   );
 }
 
@@ -82,17 +90,17 @@ export function createPublicMenfessRepository(database: PublicDatabase) {
     async submitMenfess(
       categorySlug: string,
       message: string,
-    ): Promise<TrackingCredentialPair | null> {
+      idempotencyKey: string,
+    ): Promise<SubmissionRepositoryResult> {
       const { trackingCodeKey, trackingUrlKey } = loadD2Secrets();
+      const credentials = createTrackingCredentialPairForIdempotency(
+        idempotencyKey,
+        trackingCodeKey,
+        trackingUrlKey,
+      );
 
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const credentials = createTrackingCredentialPair(
-          trackingCodeKey,
-          trackingUrlKey,
-        );
-
-        try {
-          const inserted = await database.$queryRaw<Array<{ inserted: boolean }>>`
+      try {
+        const inserted = await database.$queryRaw<Array<{ inserted: boolean }>>`
             INSERT INTO app_private.menfess (
               category_id,
               message,
@@ -116,15 +124,37 @@ export function createPublicMenfessRepository(database: PublicDatabase) {
             RETURNING true AS inserted
           `;
 
-          return inserted[0]?.inserted ? credentials : null;
-        } catch (error) {
-          if (!isUniqueViolation(error) || attempt === 2) {
-            throw error;
-          }
+        return inserted[0]?.inserted
+          ? { kind: "created", credentials }
+          : { kind: "category-unavailable" };
+      } catch (error) {
+        if (!isUniqueViolation(error)) {
+          throw error;
         }
-      }
 
-      throw new Error("Tracking credential generation failed.");
+        const [existing] = await database.$queryRaw<
+          Array<{ message: string; category_slug: string; replayable: boolean }>
+        >`
+          SELECT
+            menfess.message,
+            category.slug AS category_slug,
+            menfess.submitted_at >= clock_timestamp() - INTERVAL '24 hours'
+              AS replayable
+          FROM app_private.menfess AS menfess
+          JOIN app_private.category AS category ON category.id = menfess.category_id
+          WHERE menfess.tracking_code_digest = ${credentials.trackingCodeDigest}
+            AND menfess.tracking_code_key_version = ${credentials.trackingCodeKeyVersion}::smallint
+            AND menfess.tracking_url_digest = ${credentials.trackingUrlDigest}
+            AND menfess.tracking_url_key_version = ${credentials.trackingUrlKeyVersion}::smallint
+          LIMIT 1
+        `;
+
+        return existing?.replayable === true &&
+          existing.message === message &&
+          existing.category_slug === categorySlug
+          ? { kind: "replayed", credentials }
+          : { kind: "idempotency-conflict" };
+      }
     },
 
     async findPublicStatus(

@@ -2,6 +2,9 @@ import { z } from "zod";
 
 export const submissionPayloadSchema = z
   .object({
+    idempotencyKey: z
+      .string()
+      .regex(/^bmi_[A-Za-z0-9_-]{43}$/u, "Identitas permintaan tidak valid."),
     category: z
       .string()
       .trim()
@@ -43,7 +46,7 @@ export type PublicCategory = {
   label: string;
 };
 
-export type RateLimitScope = "submission" | "tracking";
+export type RateLimitScope = "submission" | "tracking" | "admin-login";
 
 export type RateLimitDecision = {
   allowed: boolean;
@@ -60,3 +63,10 @@ export type TrackingCredentialPair = {
   trackingUrlDigest: Buffer;
   trackingUrlKeyVersion: number;
 };
+
+export type SubmissionRepositoryResult =
+  | {
+      kind: "created" | "replayed";
+      credentials: TrackingCredentialPair;
+    }
+  | { kind: "category-unavailable" | "idempotency-conflict" };

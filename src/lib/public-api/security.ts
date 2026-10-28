@@ -137,6 +137,34 @@ export function createTrackingCredentialPair(
   };
 }
 
+export function createTrackingCredentialPairForIdempotency(
+  idempotencyKey: string,
+  trackingCodeKey: Buffer,
+  trackingUrlKey: Buffer,
+): TrackingCredentialPair {
+  const codeEntropy = createHmac("sha256", trackingCodeKey)
+    .update("bawean-menfess:tracking-code\0", "utf8")
+    .update(idempotencyKey, "utf8")
+    .digest()
+    .subarray(0, 20);
+  const urlEntropy = createHmac("sha256", trackingUrlKey)
+    .update("bawean-menfess:tracking-url\0", "utf8")
+    .update(idempotencyKey, "utf8")
+    .digest();
+  const trackingCode = createHumanReadableTrackingCode(codeEntropy);
+  const trackingUrlToken = createTrackingUrlToken(urlEntropy);
+
+  return {
+    trackingCode,
+    trackingUrlToken,
+    trackingPath: `/lacak#t=${trackingUrlToken}`,
+    trackingCodeDigest: digestCredential(trackingCode, trackingCodeKey),
+    trackingCodeKeyVersion: HMAC_KEY_VERSION,
+    trackingUrlDigest: digestCredential(trackingUrlToken, trackingUrlKey),
+    trackingUrlKeyVersion: HMAC_KEY_VERSION,
+  };
+}
+
 export type ParsedTrackingCredential =
   | { kind: "code"; normalized: string }
   | { kind: "url"; normalized: string };
@@ -211,6 +239,21 @@ export function createRateLimitIdentifier(
   return {
     digest: createHmac("sha256", rateLimitIdentifierKey)
       .update(`${scope}\0${address}`, "utf8")
+      .digest(),
+    keyVersion: HMAC_KEY_VERSION,
+  };
+}
+
+export function createRateLimitKeyDigest(
+  value: string,
+  scope: RateLimitScope,
+  environment: D2Environment = process.env,
+) {
+  const { rateLimitIdentifierKey } = loadD2Secrets(environment);
+
+  return {
+    digest: createHmac("sha256", rateLimitIdentifierKey)
+      .update(`${scope}\0${value}`, "utf8")
       .digest(),
     keyVersion: HMAC_KEY_VERSION,
   };

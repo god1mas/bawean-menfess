@@ -34,16 +34,19 @@ export class ModerationError extends Error {
 
 type ModerationDatabase = Pick<
   PrismaClient,
-  "$transaction" | "category" | "menfess" | "moderationLog"
+  "$queryRaw" | "$transaction" | "category" | "menfess" | "moderationLog" | "publicationRemoval"
 >;
 
 function isUniqueViolation(error: unknown) {
-  return (
-    !!error &&
-    typeof error === "object" &&
-    "code" in error &&
-    error.code === "P2002"
-  );
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as {
+    code?: string;
+    meta?: { code?: string; driverAdapterError?: { cause?: { originalCode?: string } } };
+  };
+  const postgresCode = candidate.meta?.code ??
+    candidate.meta?.driverAdapterError?.cause?.originalCode;
+  return candidate.code === "P2002" || candidate.code === "23505" ||
+    (candidate.code === "P2010" && postgresCode === "23505");
 }
 
 function queueWhere(query: ModerationQuery) {
@@ -90,7 +93,8 @@ export function createAdminModerationRepository(database: ModerationDatabase) {
         stats: {
           total,
           pending,
-          approvedPublished: approved + published,
+          approved,
+          published,
           rejected,
         },
         categories,
@@ -142,6 +146,13 @@ export function createAdminModerationRepository(database: ModerationDatabase) {
           updatedAt: true,
           publishedAt: true,
           publicationReference: true,
+          publicationRemoval: {
+            select: {
+              reason: true,
+              removedAt: true,
+              actor: { select: { name: true } },
+            },
+          },
           category: { select: { slug: true, label: true } },
           moderationLogs: {
             orderBy: { createdAt: "desc" },
@@ -159,12 +170,53 @@ export function createAdminModerationRepository(database: ModerationDatabase) {
       });
     },
 
+    async recordPublicationRemoval(input: {
+      id: string;
+      actorUserId: string;
+      reason: string;
+    }) {
+      if (!input.reason.trim()) {
+        throw new ModerationError("REASON_REQUIRED");
+      }
+
+      const current = await database.menfess.findUnique({
+        where: { id: input.id },
+        select: { status: true },
+      });
+      if (!current) throw new ModerationError("NOT_FOUND");
+      if (current.status !== "PUBLISHED") {
+        throw new ModerationError("INVALID_TRANSITION");
+      }
+
+      try {
+        const [recorded] = await database.$queryRaw<
+          Array<{ menfessId: string; removedAt: Date }>
+        >`
+          INSERT INTO app_private.publication_removal (
+            menfess_id, actor_user_id, idempotency_key, reason
+          ) VALUES (
+            ${input.id}::uuid,
+            ${input.actorUserId}::uuid,
+            ${randomUUID()}::uuid,
+            ${input.reason.trim()}
+          )
+          RETURNING menfess_id AS "menfessId", removed_at AS "removedAt"
+        `;
+        if (!recorded) throw new Error("Publication removal returned no record.");
+        return recorded;
+      } catch (error) {
+        if (isUniqueViolation(error)) throw new ModerationError("CONFLICT");
+        throw error;
+      }
+    },
+
     async moderate(input: {
       id: string;
       actorUserId: string;
       action: ModerationAction;
       expectedVersion: number;
       reason?: string;
+      publicationReference?: string;
     }) {
       if (
         input.action === "REJECT" &&
@@ -206,7 +258,10 @@ export function createAdminModerationRepository(database: ModerationDatabase) {
               version: { increment: 1 },
               updatedAt: now,
               ...(input.action === "PUBLISH"
-                ? { publishedAt: now, publicationReference: null }
+                ? {
+                    publishedAt: now,
+                    publicationReference: input.publicationReference ?? null,
+                  }
                 : {}),
             },
           });
@@ -232,7 +287,11 @@ export function createAdminModerationRepository(database: ModerationDatabase) {
               ${input.action === "PUBLISH" ? "MARK_PUBLISHED" : input.action}::app_private."ModerationAction",
               ${current.status}::app_private."MenfessStatus",
               ${nextStatus}::app_private."MenfessStatus",
-              ${input.reason?.trim() || null}
+              ${
+                input.action === "PUBLISH" && input.publicationReference
+                  ? `Referensi Instagram: ${input.publicationReference}`
+                  : input.reason?.trim() || null
+              }
             )
           `;
 

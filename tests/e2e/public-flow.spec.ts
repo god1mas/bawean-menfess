@@ -28,6 +28,7 @@ test("submits an anonymous menfess and copies its one-time credential", async ({
       category: "curhat",
       message: "Cerita anonim untuk pengujian.",
       consent: true,
+      idempotencyKey: expect.stringMatching(/^bmi_[A-Za-z0-9_-]{43}$/),
     });
     expect(body).not.toHaveProperty("status");
     await route.fulfill({
@@ -48,7 +49,11 @@ test("submits an anonymous menfess and copies its one-time credential", async ({
   await page.getByRole("button", { name: "Kirim Menfess →" }).click();
 
   await expect(page.getByRole("heading", { name: "Menfess berhasil dikirim." })).toBeFocused();
-  await expect(page.getByText(trackingCode)).toBeVisible();
+  await expect(
+    page.getByRole("textbox", {
+      name: "Kode pelacakan, pilih untuk menyalin manual",
+    }),
+  ).toHaveValue(trackingCode);
   await page.getByRole("button", { name: "Salin" }).first().click();
   await expect(page.getByRole("button", { name: "Tersalin ✓" })).toBeVisible();
   expect(await page.evaluate(() => localStorage.length + sessionStorage.length)).toBe(0);

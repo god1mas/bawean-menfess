@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AdminAuthorization } from "@/lib/admin-authorization";
+import { normalizeInstagramPublicationReference } from "@/lib/instagram-publication";
 import {
   ModerationError,
   type AdminModerationRepository,
@@ -18,17 +19,42 @@ const querySchema = z.object({
 });
 const actionSchema = z
   .object({
-    action: z.enum(["APPROVE", "REJECT", "PUBLISH"]),
+    action: z.enum(["APPROVE", "REJECT", "PUBLISH", "REMOVE_PUBLICATION"]),
     expectedVersion: z.number().int().nonnegative(),
     reason: z.string().trim().max(1_000).optional(),
+    publicationReference: z.string().trim().max(500).optional(),
   })
   .strict()
   .superRefine((value, context) => {
-    if (value.action === "REJECT" && !value.reason) {
+    if (["REJECT", "REMOVE_PUBLICATION"].includes(value.action) && !value.reason) {
       context.addIssue({
         code: "custom",
         path: ["reason"],
         message: "Alasan penolakan wajib diisi.",
+      });
+    }
+    if (!["REJECT", "REMOVE_PUBLICATION"].includes(value.action) && value.reason) {
+      context.addIssue({
+        code: "custom",
+        path: ["reason"],
+        message: "Alasan hanya dapat diisi saat menolak kiriman.",
+      });
+    }
+    if (value.action !== "PUBLISH" && value.publicationReference) {
+      context.addIssue({
+        code: "custom",
+        path: ["publicationReference"],
+        message: "Referensi publikasi hanya dapat diisi saat publikasi.",
+      });
+    }
+    if (
+      value.action === "PUBLISH" &&
+      normalizeInstagramPublicationReference(value.publicationReference) === null
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["publicationReference"],
+        message: "Gunakan tautan posting Instagram yang valid.",
       });
     }
   });
@@ -272,11 +298,25 @@ export function createAdminModerationHandlers(
           );
         }
 
-        const result = await dependencies.repository.moderate({
-          id,
-          actorUserId: access.authorization.user.id,
-          ...parsed.data,
-        });
+        const publicationReference = normalizeInstagramPublicationReference(
+          parsed.data.publicationReference,
+        );
+        const result = parsed.data.action === "REMOVE_PUBLICATION"
+          ? await dependencies.repository.recordPublicationRemoval({
+              id,
+              actorUserId: access.authorization.user.id,
+              reason: parsed.data.reason ?? "",
+            })
+          : await dependencies.repository.moderate({
+              id,
+              actorUserId: access.authorization.user.id,
+              action: parsed.data.action,
+              expectedVersion: parsed.data.expectedVersion,
+              ...(parsed.data.action === "REJECT" && parsed.data.reason
+                ? { reason: parsed.data.reason }
+                : {}),
+              ...(publicationReference ? { publicationReference } : {}),
+            });
 
         return json({ result }, 200);
       } catch (error) {

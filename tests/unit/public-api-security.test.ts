@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   createHumanReadableTrackingCode,
   createRateLimitIdentifier,
+  createRateLimitKeyDigest,
+  createTrackingCredentialPairForIdempotency,
   createTrackingUrlToken,
   digestCredential,
   loadD2Secrets,
@@ -73,6 +75,31 @@ describe("D2 credential security", () => {
     expect(digest.toString("utf8")).not.toContain("BM-0123");
   });
 
+  it("derives stable confidential credentials from a 256-bit request key", () => {
+    const requestKey = `bmi_${Buffer.alloc(32, 0x5a).toString("base64url")}`;
+    const first = createTrackingCredentialPairForIdempotency(
+      requestKey,
+      Buffer.from(environment.TRACKING_CODE_HMAC_KEY_V1),
+      Buffer.from(environment.TRACKING_URL_HMAC_KEY_V1),
+    );
+    const replay = createTrackingCredentialPairForIdempotency(
+      requestKey,
+      Buffer.from(environment.TRACKING_CODE_HMAC_KEY_V1),
+      Buffer.from(environment.TRACKING_URL_HMAC_KEY_V1),
+    );
+    const distinct = createTrackingCredentialPairForIdempotency(
+      `bmi_${Buffer.alloc(32, 0x6b).toString("base64url")}`,
+      Buffer.from(environment.TRACKING_CODE_HMAC_KEY_V1),
+      Buffer.from(environment.TRACKING_URL_HMAC_KEY_V1),
+    );
+
+    expect(replay.trackingCode).toBe(first.trackingCode);
+    expect(replay.trackingUrlToken).toBe(first.trackingUrlToken);
+    expect(distinct.trackingCode).not.toBe(first.trackingCode);
+    expect(distinct.trackingUrlToken).not.toBe(first.trackingUrlToken);
+    expect(first.trackingCodeDigest.toString("utf8")).not.toContain(requestKey);
+  });
+
   it("requires independent server-only HMAC secrets", () => {
     expect(loadD2Secrets(environment).trackingCodeKey).toHaveLength(
       Buffer.byteLength(environment.TRACKING_CODE_HMAC_KEY_V1),
@@ -120,7 +147,7 @@ describe("rate-limit client identity", () => {
     ).toThrow(/trusted production proxy/);
   });
 
-  it("domain-separates submission and tracking rate-limit identities", () => {
+  it("domain-separates public and administrator rate-limit identities", () => {
     const request = new Request("http://localhost", {
       headers: { "x-forwarded-for": "198.51.100.9" },
     });
@@ -130,9 +157,17 @@ describe("rate-limit client identity", () => {
       environment,
     );
     const tracking = createRateLimitIdentifier(request, "tracking", environment);
+    const login = createRateLimitKeyDigest(
+      "198.51.100.9|/sign-in/email",
+      "admin-login",
+      environment,
+    );
 
     expect(submission.digest).toHaveLength(32);
     expect(tracking.digest).toHaveLength(32);
     expect(submission.digest.equals(tracking.digest)).toBe(false);
+    expect(login.digest).toHaveLength(32);
+    expect(login.digest.equals(submission.digest)).toBe(false);
+    expect(login.digest.toString("utf8")).not.toContain("198.51.100.9");
   });
 });

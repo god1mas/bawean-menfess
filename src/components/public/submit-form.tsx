@@ -9,10 +9,23 @@ import {
   useRef,
   useState,
 } from "react";
+import { copyText } from "@/lib/clipboard";
+import { ClientRequestError, requestJson } from "@/lib/client-json";
 
 type Category = { slug: string; label: string };
 type FieldErrors = Partial<Record<"category" | "message" | "consent", string>>;
 type SubmitSuccess = { trackingCode: string; trackingPath: string };
+
+function createSubmissionIdempotencyKey() {
+  const entropy = new Uint8Array(32);
+  crypto.getRandomValues(entropy);
+  const encoded = btoa(String.fromCharCode(...entropy))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/u, "");
+
+  return `bmi_${encoded}`;
+}
 
 export function SubmitForm() {
   const [categories, setCategories] = useState<Category[] | null>(null);
@@ -25,23 +38,26 @@ export function SubmitForm() {
   const [pending, setPending] = useState(false);
   const [success, setSuccess] = useState<SubmitSuccess>();
   const successHeading = useRef<HTMLHeadingElement>(null);
+  const idempotencyKey = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     const controller = new AbortController();
 
     async function loadCategories() {
       try {
-        const response = await fetch("/api/public/categories", {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        const body = (await response.json()) as {
+        const body = await requestJson<{
           categories?: Category[];
-          message?: string;
-        };
+        }>(
+          "/api/public/categories",
+          { cache: "no-store", signal: controller.signal },
+          {
+            fallbackMessage: "Kategori belum dapat dimuat.",
+            timeoutMessage: "Pemuatan kategori terlalu lama. Coba lagi.",
+          },
+        );
 
-        if (!response.ok || !body.categories) {
-          throw new Error(body.message ?? "Kategori belum dapat dimuat.");
+        if (!body.categories) {
+          throw new ClientRequestError("Kategori belum dapat dimuat.");
         }
 
         setCategories(body.categories);
@@ -88,22 +104,32 @@ export function SubmitForm() {
     setPending(true);
 
     try {
-      const response = await fetch("/api/public/menfess", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ category, message, consent }),
-      });
-      const body = (await response.json()) as {
+      idempotencyKey.current ??= createSubmissionIdempotencyKey();
+      const body = await requestJson<{
         trackingCode?: string;
         trackingPath?: string;
-        message?: string;
-        fields?: FieldErrors;
-      };
+      }>(
+        "/api/public/menfess",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            category,
+            message,
+            consent,
+            idempotencyKey: idempotencyKey.current,
+          }),
+        },
+        {
+          fallbackMessage: "Menfess belum dapat dikirim. Coba lagi nanti.",
+          timeoutMessage:
+            "Pengiriman terlalu lama. Coba lagi; permintaan yang sama tidak akan menggandakan menfess.",
+        },
+      );
 
-      if (!response.ok || !body.trackingCode || !body.trackingPath) {
-        if (body.fields) setErrors(body.fields);
-        throw new Error(
-          body.message ?? "Menfess belum dapat dikirim. Coba lagi nanti.",
+      if (!body.trackingCode || !body.trackingPath) {
+        throw new ClientRequestError(
+          "Menfess belum dapat dikirim. Coba lagi nanti.",
         );
       }
 
@@ -112,6 +138,13 @@ export function SubmitForm() {
         trackingPath: body.trackingPath,
       });
     } catch (error) {
+      if (error instanceof ClientRequestError && error.fields) {
+        setErrors({
+          category: error.fields.category,
+          message: error.fields.message,
+          consent: error.fields.consent,
+        });
+      }
       setRequestError(
         error instanceof Error
           ? error.message
@@ -131,6 +164,7 @@ export function SubmitForm() {
           setCategory("");
           setMessage("");
           setConsent(false);
+          idempotencyKey.current = undefined;
           setSuccess(undefined);
         }}
       />
@@ -223,8 +257,23 @@ export function SubmitForm() {
             className="mt-0.5 size-5 shrink-0 accent-[var(--bm-bg-brand)]"
           />
           <span>
-            Saya memahami bahwa pesan akan ditinjau sebelum dipublikasikan serta
-            menyetujui aturan komunitas.
+            Saya memahami bahwa pesan dan kategori akan disimpan untuk moderasi,
+            pesan dapat ditolak, dan persetujuan tidak menjamin publikasi. Saya
+            telah membaca{" "}
+            <Link
+              className="font-bold text-bm-brand underline"
+              href={"/aturan" as Route}
+            >
+              aturan komunitas
+            </Link>{" "}
+            dan{" "}
+            <Link
+              className="font-bold text-bm-brand underline"
+              href={"/privasi" as Route}
+            >
+              informasi privasi
+            </Link>
+            .
           </span>
         </label>
         {errors.consent ? (
@@ -278,14 +327,21 @@ function SubmissionSuccess({
   onReset,
 }: SubmissionSuccessProps) {
   const [copied, setCopied] = useState<"code" | "link">();
+  const [copyError, setCopyError] = useState<"code" | "link">();
   const trackingUrl =
     typeof window === "undefined"
       ? result.trackingPath
       : new URL(result.trackingPath, window.location.origin).toString();
 
   async function copy(value: string, kind: "code" | "link") {
-    await navigator.clipboard.writeText(value);
-    setCopied(kind);
+    try {
+      await copyText(value);
+      setCopyError(undefined);
+      setCopied(kind);
+    } catch {
+      setCopied(undefined);
+      setCopyError(kind);
+    }
   }
 
   return (
@@ -311,12 +367,14 @@ function SubmissionSuccess({
         label="Kode pelacakan"
         value={result.trackingCode}
         copied={copied === "code"}
+        copyFailed={copyError === "code"}
         onCopy={() => copy(result.trackingCode, "code")}
       />
       <CredentialCard
         label="Tautan pelacakan privat"
         value={trackingUrl}
         copied={copied === "link"}
+        copyFailed={copyError === "link"}
         onCopy={() => copy(trackingUrl, "link")}
       />
 
@@ -343,14 +401,28 @@ type CredentialCardProps = {
   label: string;
   value: string;
   copied: boolean;
+  copyFailed: boolean;
   onCopy: () => Promise<void>;
 };
 
-function CredentialCard({ label, value, copied, onCopy }: CredentialCardProps) {
+export function CredentialCard({
+  label,
+  value,
+  copied,
+  copyFailed,
+  onCopy,
+}: CredentialCardProps) {
   return (
     <div className="rounded-2xl border border-bm-border bg-bm-page p-4">
       <p className="text-xs font-bold text-bm-brand">{label}</p>
-      <p className="mt-2 break-all font-mono text-sm text-bm-text">{value}</p>
+      <input
+        aria-label={`${label}, pilih untuk menyalin manual`}
+        className="mt-2 w-full rounded-lg border border-bm-border bg-white px-3 py-2 font-mono text-sm text-bm-text"
+        onClick={(event) => event.currentTarget.select()}
+        onFocus={(event) => event.currentTarget.select()}
+        readOnly
+        value={value}
+      />
       <button
         type="button"
         onClick={() => void onCopy()}
@@ -358,6 +430,11 @@ function CredentialCard({ label, value, copied, onCopy }: CredentialCardProps) {
       >
         {copied ? "Tersalin ✓" : "Salin"}
       </button>
+      {copyFailed ? (
+        <p className="mt-3 text-xs leading-5 text-red-700" role="alert">
+          Salin otomatis gagal. Pilih teks di atas lalu salin secara manual.
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -7,6 +7,7 @@ const { Client } = pg;
 const containerName = `bawean-menfess-postgres-test-${process.pid}`;
 const databaseName = "bawean_d1_test";
 const bootstrapDatabaseName = "bawean_admin_bootstrap_test";
+const runPlaywright = process.argv.includes("--playwright");
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -80,6 +81,18 @@ async function provision(port) {
       await owner.query(
         readFileSync(
           "prisma/migrations/20261022130000_add_postgres_rate_limiting/migration.sql",
+          "utf8",
+        ),
+      );
+      await owner.query(
+        readFileSync(
+          "prisma/migrations/20261027130000_add_admin_login_rate_limiting/migration.sql",
+          "utf8",
+        ),
+      );
+      await owner.query(
+        readFileSync(
+          "prisma/migrations/20261028130000_add_policy_retention/migration.sql",
           "utf8",
         ),
       );
@@ -168,6 +181,17 @@ async function main() {
       ],
       { inherit: true, env: childEnvironment },
     );
+
+    if (runPlaywright) {
+      run(
+        process.execPath,
+        ["node_modules/@playwright/test/cli.js", "test"],
+        {
+          inherit: true,
+          env: { ...childEnvironment, NODE_ENV: "development" },
+        },
+      );
+    }
   } finally {
     if (started) {
       spawnSync("docker", ["stop", containerName], { stdio: "ignore" });

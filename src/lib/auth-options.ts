@@ -1,4 +1,8 @@
-import { APIError, type BetterAuthOptions } from "better-auth";
+import {
+  APIError,
+  type BetterAuthOptions,
+  type BetterAuthRateLimitOptions,
+} from "better-auth";
 import { nextCookies } from "better-auth/next-js";
 
 export type AuthEnvironment = {
@@ -49,6 +53,7 @@ export function createAuthOptions(
   environment: AuthEnvironment,
   database: NonNullable<BetterAuthOptions["database"]>,
   plugins = [nextCookies()],
+  rateLimit?: BetterAuthRateLimitOptions,
 ): BetterAuthOptions {
   const { secret, baseURL } = validateAuthEnvironment(environment);
   const secureCookies =
@@ -59,6 +64,7 @@ export function createAuthOptions(
     baseURL,
     secret,
     database,
+    ...(rateLimit ? { rateLimit } : {}),
     trustedOrigins: [baseURL],
     emailAndPassword: {
       enabled: true,
@@ -100,6 +106,9 @@ export function createAuthOptions(
     account: { modelName: "account" },
     verification: { modelName: "verification" },
     advanced: {
+      ipAddress: {
+        ipAddressHeaders: ["x-vercel-forwarded-for"],
+      },
       database: {
         generateId: "uuid",
       },

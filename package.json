@@ -18,6 +18,7 @@
     "admin:bootstrap-first": "node scripts/admin/bootstrap-first-admin.mjs",
     "test": "vitest run",
     "test:postgres": "node scripts/test/run-postgres-integration.mjs",
+    "test:e2e:postgres": "node scripts/test/run-postgres-integration.mjs --playwright",
     "test:watch": "vitest",
     "test:e2e": "playwright test"
   },

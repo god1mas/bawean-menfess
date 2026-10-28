@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { ClientRequestError, requestJson } from "@/lib/client-json";
 import type { PublicMenfessStatus } from "@/lib/public-api/contracts";
 
 type LookupState =
@@ -54,18 +55,25 @@ export function TrackingForm() {
     setState({ kind: "loading" });
 
     try {
-      const response = await fetch("/api/public/track", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: normalized }),
-      });
-      const body = (await response.json()) as {
+      const body = await requestJson<{
         status?: PublicMenfessStatus;
-        message?: string;
-      };
+      }>(
+        "/api/public/track",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: normalized }),
+        },
+        {
+          fallbackMessage: "Status belum dapat diperiksa. Coba lagi nanti.",
+          timeoutMessage: "Pemeriksaan status terlalu lama. Coba lagi.",
+        },
+      );
 
-      if (!response.ok || !body.status) {
-        throw new Error(body.message ?? "Kode pelacakan tidak ditemukan.");
+      if (!body.status) {
+        throw new ClientRequestError(
+          "Status belum dapat diperiksa. Coba lagi nanti.",
+        );
       }
 
       setState({

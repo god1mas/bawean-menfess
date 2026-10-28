@@ -13,8 +13,8 @@ export const publicApiDependencies: PublicApiDependencies = {
   consumeRateLimit: (scope, digest, keyVersion) =>
     repository.consumeRateLimit(scope, digest, keyVersion),
   listActiveCategories: () => repository.listActiveCategories(),
-  submitMenfess: (categorySlug, message) =>
-    repository.submitMenfess(categorySlug, message),
+  submitMenfess: (categorySlug, message, idempotencyKey) =>
+    repository.submitMenfess(categorySlug, message, idempotencyKey),
   findPublicStatus: (rawCredential) =>
     repository.findPublicStatus(rawCredential),
 };

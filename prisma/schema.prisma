@@ -39,6 +39,7 @@ model User {
   sessions       Session[]
   accounts       Account[]
   moderationLogs ModerationLog[]
+  publicationRemovals PublicationRemoval[]
 
   @@unique([email])
   @@map("auth_user")
@@ -127,12 +128,48 @@ model Menfess {
   updatedAt              DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
   publishedAt            DateTime?       @map("published_at") @db.Timestamptz(6)
   publicationReference   String?         @map("publication_reference") @db.VarChar(500)
+  legalHoldAt             DateTime?       @map("legal_hold_at") @db.Timestamptz(6)
+  legalHoldReason         String?         @map("legal_hold_reason") @db.VarChar(500)
   category               Category        @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   moderationLogs         ModerationLog[]
+  publicationRemoval     PublicationRemoval?
 
   @@index([status, submittedAt(sort: Desc)])
   @@index([categoryId, submittedAt(sort: Desc)])
   @@map("menfess")
+  @@schema("app_private")
+}
+
+model PublicationRemoval {
+  id             String   @id @default(dbgenerated("pg_catalog.gen_random_uuid()")) @db.Uuid
+  menfessId      String   @unique @map("menfess_id") @db.Uuid
+  actorUserId    String   @map("actor_user_id") @db.Uuid
+  idempotencyKey String   @unique @map("idempotency_key") @db.Uuid
+  reason         String   @db.VarChar(1000)
+  removedAt      DateTime @default(now()) @map("removed_at") @db.Timestamptz(6)
+  menfess        Menfess  @relation(fields: [menfessId], references: [id], onDelete: Restrict)
+  actor          User     @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([removedAt(sort: Desc)])
+  @@index([actorUserId, removedAt(sort: Desc)])
+  @@map("publication_removal")
+  @@schema("app_private")
+}
+
+// Owner-only operational evidence. Normal application credentials receive no
+// privileges on this model or the retention functions that write it.
+model RetentionCleanupRun {
+  id                         String   @id @default(dbgenerated("pg_catalog.gen_random_uuid()")) @db.Uuid
+  startedAt                  DateTime @default(now()) @map("started_at") @db.Timestamptz(6)
+  finishedAt                 DateTime @map("finished_at") @db.Timestamptz(6)
+  menfessDeleted             Int      @map("menfess_deleted")
+  moderationLogsDeleted      Int      @map("moderation_logs_deleted")
+  publicationRemovalsDeleted Int      @map("publication_removals_deleted")
+  rateLimitRowsDeleted       Int      @map("rate_limit_rows_deleted")
+
+  @@index([startedAt(sort: Desc)])
+  @@ignore
+  @@map("retention_cleanup_run")
   @@schema("app_private")
 }
 

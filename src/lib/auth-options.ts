@@ -9,7 +9,22 @@ export type AuthEnvironment = {
   BETTER_AUTH_SECRET?: string;
   BETTER_AUTH_URL?: string;
   NODE_ENV?: string;
+  VERCEL_URL?: string;
 };
+
+function vercelDeploymentOrigin(value: string | undefined) {
+  if (!value) return undefined;
+
+  const hostname = value.trim().toLowerCase();
+  const vercelHostname =
+    /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+vercel\.app$/;
+
+  if (!vercelHostname.test(hostname)) {
+    throw new Error("VERCEL_URL must be a valid Vercel deployment hostname.");
+  }
+
+  return `https://${hostname}`;
+}
 
 export function validateAuthEnvironment(environment: AuthEnvironment) {
   const secret = environment.BETTER_AUTH_SECRET;
@@ -46,7 +61,14 @@ export function validateAuthEnvironment(environment: AuthEnvironment) {
     throw new Error("BETTER_AUTH_URL must use HTTPS in production.");
   }
 
-  return { secret, baseURL: parsedUrl.origin };
+  const baseURL = parsedUrl.origin;
+  const deploymentOrigin = vercelDeploymentOrigin(environment.VERCEL_URL);
+
+  return {
+    secret,
+    baseURL,
+    trustedOrigins: [...new Set([baseURL, deploymentOrigin].filter(Boolean))] as string[],
+  };
 }
 
 export function createAuthOptions(
@@ -55,7 +77,8 @@ export function createAuthOptions(
   plugins = [nextCookies()],
   rateLimit?: BetterAuthRateLimitOptions,
 ): BetterAuthOptions {
-  const { secret, baseURL } = validateAuthEnvironment(environment);
+  const { secret, baseURL, trustedOrigins } =
+    validateAuthEnvironment(environment);
   const secureCookies =
     environment.NODE_ENV === "production" || baseURL.startsWith("https://");
 
@@ -65,7 +88,7 @@ export function createAuthOptions(
     secret,
     database,
     ...(rateLimit ? { rateLimit } : {}),
-    trustedOrigins: [baseURL],
+    trustedOrigins,
     emailAndPassword: {
       enabled: true,
       disableSignUp: true,

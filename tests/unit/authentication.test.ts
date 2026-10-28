@@ -140,6 +140,50 @@ describe("admin-only Better Auth configuration", () => {
       sameSite: "lax",
       secure: true,
     });
+
+    expect(() =>
+      validateAuthEnvironment({
+        ...testEnvironment,
+        VERCEL_URL: "https://untrusted.example.com/path",
+      }),
+    ).toThrow(/VERCEL_URL/);
+  });
+
+  it("trusts only the exact Vercel deployment origin supplied by the platform", async () => {
+    const deploymentHostname =
+      "bawean-menfess-test-deployment-god1mas.vercel.app";
+    const deploymentOrigin = `https://${deploymentHostname}`;
+    const environment = {
+      ...testEnvironment,
+      BETTER_AUTH_URL: "https://bawean-menfess.vercel.app",
+      NODE_ENV: "production",
+      VERCEL_URL: deploymentHostname,
+    };
+    const options = createAuthOptions(
+      environment,
+      memoryAdapter({ user: [], session: [], account: [], verification: [] }),
+      [],
+    );
+    const auth = betterAuth(options);
+    const response = await auth.handler(
+      new Request(`${deploymentOrigin}/api/auth/sign-in/email`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: deploymentOrigin,
+        },
+        body: JSON.stringify({
+          email: "missing@example.test",
+          password: invalidPassword,
+        }),
+      }),
+    );
+
+    expect(options.trustedOrigins).toEqual([
+      "https://bawean-menfess.vercel.app",
+      deploymentOrigin,
+    ]);
+    expect(response.status).toBe(401);
   });
 
   it("rejects signup and user updates at the HTTP boundary", async () => {

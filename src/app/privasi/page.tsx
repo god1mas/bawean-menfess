@@ -23,7 +23,7 @@ export default function PrivacyPage() {
       </ul><p className="mt-3">Catatan audit terkait mengikuti masa simpan kiriman. Penahanan yang diwajibkan hukum dapat memperpanjangnya. Pelaksanaan bergantung pada pemeliharaan terjadwal; kegagalan infrastruktur dapat menunda penghapusan. Kredensial pelacakan berhenti berfungsi setelah kiriman dihapus.</p></section>
       <section className="mt-8 text-sm leading-7 text-bm-muted"><h2 className="text-xl font-bold text-bm-brand">Cadangan dan kontak</h2>
         <p className="mt-3">Penghapusan dari basis data aktif tidak selalu langsung menghapus salinan cadangan. Konfigurasi dan masa simpan cadangan proyek masih harus diverifikasi sebelum peluncuran. Setelah pemulihan cadangan, penghapusan yang terjadi setelah titik pemulihan harus diterapkan kembali.</p>
-        <p className="mt-3">Pertanyaan privasi dan laporan dapat dikirim ke <a className="font-bold text-bm-brand underline" href="mailto:dimasabdussyukur@gmail.com">dimasabdussyukur@gmail.com</a>. Tidak ada tenggat respons operasional yang dijanjikan selain kewajiban hukum yang berlaku.</p>
+        <p className="mt-3">Pertanyaan privasi dan laporan dapat dikirim ke <a className="font-bold text-bm-brand underline" href="https://www.instagram.com/baweanmenfess/">@baweanmenfess</a>. Tidak ada tenggat respons operasional yang dijanjikan selain kewajiban hukum yang berlaku.</p>
       </section>
     </article></main><PublicFooter /></>
   );

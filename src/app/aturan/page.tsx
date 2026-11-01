@@ -40,7 +40,7 @@ export default function CommunityRulesPage() {
           </section>
           <section className="mt-8 text-sm leading-7 text-bm-muted">
             <h2 className="text-xl font-bold text-bm-brand">Laporan konten terbit</h2>
-            <p className="mt-3">Pihak yang terdampak dapat melapor ke <a className="font-bold text-bm-brand underline" href="mailto:dimasabdussyukur@gmail.com">dimasabdussyukur@gmail.com</a> tanpa kode pelacakan. Bawean Menfess meninjau permintaan secara manual. Kami tidak menjanjikan penghapusan atau waktu respons tertentu di luar kewajiban hukum yang berlaku.</p>
+            <p className="mt-3">Pihak yang terdampak dapat melapor ke <a className="font-bold text-bm-brand underline" href="https://www.instagram.com/baweanmenfess/">@baweanmenfess</a> tanpa kode pelacakan. Bawean Menfess meninjau permintaan secara manual. Kami tidak menjanjikan penghapusan atau waktu respons tertentu di luar kewajiban hukum yang berlaku.</p>
           </section>
         </article>
       </main>

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { Route } from "next";
+import { SupportLink } from "@/components/public/support-link";
 
 export function PublicFooter() {
   return (
@@ -17,6 +18,10 @@ export function PublicFooter() {
         <Link href={"/privasi" as Route} className="hover:text-bm-brand">
           Privasi
         </Link>
+        <SupportLink
+          showIcon={false}
+          className="font-semibold text-bm-brand hover:text-bm-gold focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-bm-brand"
+        />
       </nav>
     </footer>
   );

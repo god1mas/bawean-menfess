@@ -3,6 +3,7 @@ import Link from "next/link";
 import type { Route } from "next";
 import { PublicFooter } from "@/components/public/public-footer";
 import { PublicHeader } from "@/components/public/public-header";
+import { SupportLink } from "@/components/public/support-link";
 
 const categories = [
   ["01", "CONFESS", "Ungkapkan yang selama ini kamu simpan."],
@@ -33,9 +34,10 @@ export default function Home() {
             <p className="inline-flex rounded-full bg-[#2a6558] px-4 py-2.5 text-[10px] font-bold md:text-[13px]">🌿&nbsp; RUANG CERITA ANONIM</p>
             <h1 className="mt-6 text-[41px] font-extrabold leading-[1.08] tracking-[-0.03em] md:text-[66px]">Ceritamu,<br />Ruang Kita.</h1>
             <p className="mt-5 max-w-[570px] text-sm leading-6 text-[#d7e7dd] md:text-lg md:leading-8">Punya cerita, pertanyaan, atau perasaan yang ingin disampaikan? Bagikan secara anonim melalui Bawean Menfess.</p>
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <Link href={"/kirim" as Route} className="rounded-[13px] bg-bm-accent px-6 py-4 text-center text-sm font-bold text-bm-brand focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-white">Kirim Menfess ↗</Link>
-              <Link href={"/lacak" as Route} className="rounded-[13px] bg-[#275b4f] px-6 py-4 text-center text-sm font-bold text-white focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-white md:bg-[#e8eee8] md:text-bm-brand">Lacak Menfess →</Link>
+            <div className="mt-8 grid gap-3 sm:grid-cols-2">
+              <Link href={"/kirim" as Route} className="rounded-[13px] bg-bm-accent px-6 py-4 text-center text-sm font-bold text-bm-brand transition-colors hover:bg-[#f0ce8b] focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-white">Kirim Menfess ↗</Link>
+              <Link href={"/lacak" as Route} className="rounded-[13px] bg-[#275b4f] px-6 py-4 text-center text-sm font-bold text-white transition-colors hover:bg-[#316c5e] focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-white md:bg-[#e8eee8] md:text-bm-brand md:hover:bg-white">Lacak Menfess →</Link>
+              <SupportLink className="rounded-[13px] border border-[#6f9b8e] px-6 py-3 text-center text-sm font-bold text-white transition-colors hover:border-bm-accent hover:bg-[#275b4f] focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-white sm:col-start-2" />
             </div>
             <p className="mt-5 hidden text-xs font-medium text-[#c5ddcf] md:block">Tanpa akun&nbsp; • &nbsp;Identitas dirahasiakan&nbsp; • &nbsp;Dimoderasi</p>
           </div>

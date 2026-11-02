@@ -21,8 +21,9 @@ describe("rules and privacy journey", () => {
     const privacy = readFileSync("src/app/privasi/page.tsx", "utf8");
     const decisions = readFileSync("docs/POLICY_DECISIONS.md", "utf8");
 
-    expect(rules).toContain("dimasabdussyukur@gmail.com");
+    expect(rules).toContain("https://www.instagram.com/baweanmenfess/");
     expect(rules).toContain("tidak menjamin persetujuan atau publikasi");
+    expect(privacy).toContain("https://www.instagram.com/baweanmenfess/");
     expect(privacy).toContain("bukan pernyataan bahwa identitas operator hukum");
     expect(privacy).toContain("Konfigurasi dan masa simpan cadangan proyek masih");
     expect(decisions).toContain("Owner-approved decisions");

@@ -42,6 +42,17 @@ function repository() {
           id: input.id,
           status,
           version: input.expectedVersion + 1,
+          updatedAt: new Date(0),
+          publishedAt: input.action === "PUBLISH" ? new Date(0) : null,
+          publicationReference: input.publicationReference ?? null,
+          activity: {
+            id: randomUUID(),
+            action: input.action === "PUBLISH" ? "MARK_PUBLISHED" : input.action,
+            fromStatus: input.action === "PUBLISH" ? "APPROVED" : "PENDING",
+            toStatus: status,
+            note: input.reason ?? null,
+            createdAt: new Date(0),
+          },
         };
       },
     ),
@@ -155,6 +166,16 @@ describe("admin moderation API authorization and validation", () => {
       expectedVersion: 4,
       reason: "Tidak sesuai aturan.",
     });
+    await expect(response.json()).resolves.toMatchObject({
+      result: {
+        kind: "MODERATION",
+        status: "REJECTED",
+        activity: {
+          menfessId: submissionId,
+          actor: { name: admin.user.name },
+        },
+      },
+    });
     expect(response.headers.get("cache-control")).toContain("no-store");
   });
 
@@ -228,6 +249,14 @@ describe("admin moderation API authorization and validation", () => {
       id: submissionId,
       actorUserId: admin.user.id,
       reason: "Affected-party report verified.",
+    });
+    await expect(response.json()).resolves.toMatchObject({
+      result: {
+        kind: "PUBLICATION_REMOVAL",
+        menfessId: submissionId,
+        reason: "Affected-party report verified.",
+        actor: { name: admin.user.name },
+      },
     });
     expect(data.moderate).not.toHaveBeenCalled();
   });

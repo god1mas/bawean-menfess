@@ -9,8 +9,8 @@ import {
 } from "react";
 import { normalizeInstagramPublicationReference } from "@/lib/instagram-publication";
 
-type Status = "PENDING" | "APPROVED" | "REJECTED" | "PUBLISHED";
-type ModerationAction = "APPROVE" | "REJECT" | "PUBLISH" | "REMOVE_PUBLICATION";
+export type Status = "PENDING" | "APPROVED" | "REJECTED" | "PUBLISHED";
+export type ModerationAction = "APPROVE" | "REJECT" | "PUBLISH" | "REMOVE_PUBLICATION";
 type Category = { slug: string; label: string; isActive: boolean };
 type QueueItem = {
   id: string;
@@ -30,7 +30,7 @@ type Activity = {
   menfessId: string;
   actor: { name: string };
 };
-type DashboardData = {
+export type DashboardData = {
   stats: {
     total: number;
     pending: number;
@@ -48,7 +48,7 @@ type DashboardData = {
     pageCount: number;
   };
 };
-type Detail = QueueItem & {
+export type Detail = QueueItem & {
   updatedAt: string;
   publishedAt: string | null;
   publicationReference: string | null;
@@ -67,6 +67,29 @@ type Detail = QueueItem & {
     createdAt: string;
     actor: { name: string };
   }>;
+};
+
+type ModerationMutationResult = {
+  kind: "MODERATION";
+  id: string;
+  status: Status;
+  version: number;
+  updatedAt: string;
+  publishedAt: string | null;
+  publicationReference: string | null;
+  activity: Activity;
+};
+
+type PublicationRemovalResult = {
+  kind: "PUBLICATION_REMOVAL";
+  menfessId: string;
+  reason: string;
+  removedAt: string;
+  actor: { name: string };
+};
+
+type ActionResponse = {
+  result: ModerationMutationResult | PublicationRemovalResult;
 };
 
 const statuses: Array<{ value: Status | ""; label: string }> = [
@@ -89,6 +112,163 @@ const actionLabels: Record<Activity["action"], string> = {
   REJECT: "Menolak",
   MARK_PUBLISHED: "Mempublikasikan",
 };
+
+const targetStatuses = {
+  APPROVE: "APPROVED",
+  REJECT: "REJECTED",
+  PUBLISH: "PUBLISHED",
+} as const satisfies Record<Exclude<ModerationAction, "REMOVE_PUBLICATION">, Status>;
+
+const statKeys: Record<Status, keyof DashboardData["stats"]> = {
+  PENDING: "pending",
+  APPROVED: "approved",
+  REJECTED: "rejected",
+  PUBLISHED: "published",
+};
+
+export function applyOptimisticModeration(
+  data: DashboardData | undefined,
+  detail: Detail,
+  input: {
+    action: Exclude<ModerationAction, "REMOVE_PUBLICATION">;
+    activeStatus: Status | "";
+    publicationReference?: string;
+    timestamp: string;
+  },
+) {
+  const nextStatus = targetStatuses[input.action];
+  const fromKey = statKeys[detail.status];
+  const toKey = statKeys[nextStatus];
+  const removeFromQueue = Boolean(
+    input.activeStatus && input.activeStatus !== nextStatus,
+  );
+  const queueContainsItem = Boolean(
+    data?.queue.items.some((item) => item.id === detail.id),
+  );
+  const nextQueueTotal = data
+    ? Math.max(
+        0,
+        data.queue.total - (removeFromQueue && queueContainsItem ? 1 : 0),
+      )
+    : 0;
+
+  return {
+    data: data
+      ? {
+          ...data,
+          stats: {
+            ...data.stats,
+            [fromKey]: Math.max(0, data.stats[fromKey] - 1),
+            [toKey]: data.stats[toKey] + 1,
+          },
+          queue: {
+            ...data.queue,
+            items: data.queue.items.flatMap((item) => {
+              if (item.id !== detail.id) return [item];
+              if (removeFromQueue) return [];
+              return [
+                {
+                  ...item,
+                  status: nextStatus,
+                  version: detail.version + 1,
+                },
+              ];
+            }),
+            total: nextQueueTotal,
+            pageCount: Math.ceil(nextQueueTotal / data.queue.pageSize),
+          },
+        }
+      : undefined,
+    detail: {
+      ...detail,
+      status: nextStatus,
+      version: detail.version + 1,
+      updatedAt: input.timestamp,
+      ...(input.action === "PUBLISH"
+        ? {
+            publishedAt: input.timestamp,
+            publicationReference: input.publicationReference ?? null,
+          }
+        : {}),
+    },
+  };
+}
+
+export function applyConfirmedModeration(
+  data: DashboardData | undefined,
+  detail: Detail | undefined,
+  result: ModerationMutationResult,
+) {
+  const moderationLog = {
+    id: result.activity.id,
+    action: result.activity.action,
+    fromStatus: result.activity.fromStatus,
+    toStatus: result.activity.toStatus,
+    note: result.activity.note,
+    createdAt: result.activity.createdAt,
+    actor: result.activity.actor,
+  };
+
+  return {
+    data: data
+      ? {
+          ...data,
+          recentActivity: [
+            result.activity,
+            ...data.recentActivity.filter(
+              (activity) => activity.id !== result.activity.id,
+            ),
+          ].slice(0, 8),
+          queue: {
+            ...data.queue,
+            items: data.queue.items.map((item) =>
+              item.id === result.id
+                ? {
+                    ...item,
+                    status: result.status,
+                    version: result.version,
+                  }
+                : item,
+            ),
+          },
+        }
+      : undefined,
+    detail:
+      detail?.id === result.id
+        ? {
+            ...detail,
+            status: result.status,
+            version: result.version,
+            updatedAt: result.updatedAt,
+            publishedAt: result.publishedAt,
+            publicationReference: result.publicationReference,
+            moderationLogs: [
+              moderationLog,
+              ...detail.moderationLogs.filter(
+                (activity) => activity.id !== result.activity.id,
+              ),
+            ],
+          }
+        : detail,
+  };
+}
+
+export async function runOptimisticModerationRequest<T>(input: {
+  apply: () => void;
+  request: () => Promise<T>;
+  confirm: (result: T) => void;
+  rollback: () => void;
+}) {
+  input.apply();
+  try {
+    const result = await input.request();
+    input.confirm(result);
+    return result;
+  } catch (error) {
+    input.rollback();
+    throw error;
+  }
+}
 
 export async function runModerationActionOnce(
   lock: { current: boolean },
@@ -213,24 +393,82 @@ export function ModerationDashboard() {
 
   async function performAction(action: ModerationAction) {
     if (!selectedDetail) return false;
+    const previousData = data;
+    const previousDetail = selectedDetail;
+    const normalizedPublicationReference = normalizeInstagramPublicationReference(
+      publicationReference.trim() || undefined,
+    );
+    const optimistic = action === "REMOVE_PUBLICATION"
+      ? undefined
+      : applyOptimisticModeration(data, selectedDetail, {
+          action,
+          activeStatus: status,
+          ...(normalizedPublicationReference
+            ? { publicationReference: normalizedPublicationReference }
+            : {}),
+          timestamp: new Date().toISOString(),
+        });
+
     setActing(true);
     setActionError(undefined);
     try {
-      const response = await fetch(`/api/admin/moderation/${selectedDetail.id}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action,
-          expectedVersion: selectedDetail.version,
-          ...(["REJECT", "REMOVE_PUBLICATION"].includes(action) && reason.trim()
-            ? { reason: reason.trim() }
-            : {}),
-          ...(action === "PUBLISH" && publicationReference.trim()
-            ? { publicationReference: publicationReference.trim() }
-            : {}),
-        }),
+      await runOptimisticModerationRequest({
+        apply: () => {
+          if (!optimistic) return;
+          setData(optimistic.data);
+          setDetail(optimistic.detail);
+        },
+        request: async () => {
+          const response = await fetch(
+            `/api/admin/moderation/${previousDetail.id}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action,
+                expectedVersion: previousDetail.version,
+                ...(["REJECT", "REMOVE_PUBLICATION"].includes(action) && reason.trim()
+                  ? { reason: reason.trim() }
+                  : {}),
+                ...(action === "PUBLISH" && publicationReference.trim()
+                  ? { publicationReference: publicationReference.trim() }
+                  : {}),
+              }),
+            },
+          );
+          return readResponse<ActionResponse>(response);
+        },
+        confirm: ({ result }) => {
+          if (result.kind === "MODERATION") {
+            setData((current) =>
+              applyConfirmedModeration(current, undefined, result).data,
+            );
+            setDetail((current) =>
+              applyConfirmedModeration(undefined, current, result).detail,
+            );
+            return;
+          }
+          setDetail((current) =>
+            current?.id === result.menfessId
+              ? {
+                  ...current,
+                  publicationRemoval: {
+                    reason: result.reason,
+                    removedAt: result.removedAt,
+                    actor: result.actor,
+                  },
+                }
+              : current,
+          );
+        },
+        rollback: () => {
+          if (!optimistic) return;
+          setData(previousData);
+          setDetail((current) =>
+            current?.id === previousDetail.id ? previousDetail : current,
+          );
+        },
       });
-      await readResponse(response);
       setReason("");
       setPublicationReference("");
     } catch (reasonValue) {
@@ -240,7 +478,7 @@ export function ModerationDashboard() {
           : "Aksi moderasi belum dapat disimpan.",
       );
       try {
-        await reload();
+        await reload(false);
       } catch {
         setError("Data belum dapat dimuat ulang.");
       }
@@ -248,15 +486,7 @@ export function ModerationDashboard() {
       return false;
     }
 
-    try {
-      await reload();
-    } catch {
-      setError(
-        "Aksi tersimpan, tetapi data belum dapat dimuat ulang. Muat ulang halaman untuk melihat status terbaru.",
-      );
-    } finally {
-      setActing(false);
-    }
+    setActing(false);
     return true;
   }
 
@@ -282,24 +512,26 @@ export function ModerationDashboard() {
     if (succeeded) closeConfirmation();
   }
 
-  async function reload() {
-    setLoading(true);
+  async function reload(blocking = true) {
+    if (blocking) setLoading(true);
     setError(undefined);
     try {
-      const response = await fetch(`/api/admin/moderation?${query}`, {
-        cache: "no-store",
-      });
-      const next = await readResponse<DashboardData>(response);
+      const [next, nextDetail] = await Promise.all([
+        fetch(`/api/admin/moderation?${query}`, { cache: "no-store" }).then(
+          readResponse<DashboardData>,
+        ),
+        selectedId
+          ? fetch(`/api/admin/moderation/${selectedId}`, {
+              cache: "no-store",
+            }).then(readResponse<{ item: Detail }>)
+          : Promise.resolve(undefined),
+      ]);
       setData(next);
-      if (selectedId) {
-        const detailResponse = await fetch(`/api/admin/moderation/${selectedId}`, {
-          cache: "no-store",
-        });
-        const nextDetail = await readResponse<{ item: Detail }>(detailResponse);
+      if (nextDetail) {
         setDetail(nextDetail.item);
       }
     } finally {
-      setLoading(false);
+      if (blocking) setLoading(false);
     }
   }
 
@@ -612,7 +844,10 @@ function SubmissionDetail({
   );
 
   return (
-    <section className="rounded-[22px] border border-bm-border bg-white p-5 shadow-sm md:p-6">
+    <section
+      aria-busy={acting || undefined}
+      className="rounded-[22px] border border-bm-border bg-white p-5 shadow-sm md:p-6"
+    >
       <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-bm-gold">
         Ruang tinjau
       </p>
@@ -646,6 +881,14 @@ function SubmissionDetail({
           <p className="mt-3 text-xs text-bm-muted">
             Dikirim {formatDate(detail.submittedAt)} · versi {detail.version}
           </p>
+          {acting ? (
+            <p
+              className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900"
+              role="status"
+            >
+              Perubahan ditampilkan sementara · menyimpan ke server…
+            </p>
+          ) : null}
           <div className="mt-5 max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-bm-border bg-[#fdfbf6] p-4 text-sm leading-7 text-bm-text">
             {detail.message}
           </div>

@@ -3,9 +3,14 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
+  applyConfirmedModeration,
+  applyOptimisticModeration,
   ModerationConfirmationDialog,
   ModerationDashboard,
   runModerationActionOnce,
+  runOptimisticModerationRequest,
+  type DashboardData,
+  type Detail,
 } from "../../src/components/admin/moderation-dashboard";
 
 const navigationTargets = [
@@ -22,6 +27,34 @@ function sectionMarkup(html: string, id: string) {
   expect(match, `Expected section #${id} to render.`).not.toBeNull();
   return match?.[0] ?? "";
 }
+
+const detailFixture: Detail = {
+  id: "11111111-1111-4111-8111-111111111111",
+  message: "Pesan yang sedang ditinjau.",
+  status: "PENDING",
+  version: 0,
+  submittedAt: new Date(0).toISOString(),
+  updatedAt: new Date(0).toISOString(),
+  publishedAt: null,
+  publicationReference: null,
+  publicationRemoval: null,
+  trackingCredentials: "Kredensial tidak tersedia.",
+  category: { slug: "curhat", label: "Curhat" },
+  moderationLogs: [],
+};
+
+const dashboardFixture: DashboardData = {
+  stats: { total: 1, pending: 1, approved: 0, published: 0, rejected: 0 },
+  categories: [{ slug: "curhat", label: "Curhat", isActive: true }],
+  recentActivity: [],
+  queue: {
+    items: [detailFixture],
+    total: 1,
+    page: 1,
+    pageSize: 20,
+    pageCount: 1,
+  },
+};
 
 describe("administrator dashboard anchor navigation", () => {
   const pageSource = readFileSync("src/app/admin/page.tsx", "utf8");
@@ -122,5 +155,97 @@ describe("administrator dashboard anchor navigation", () => {
     resolveAction?.(true);
     await expect(first).resolves.toBe(true);
     expect(lock.current).toBe(false);
+  });
+
+  it("updates status and counts optimistically without claiming an audit success", () => {
+    const optimistic = applyOptimisticModeration(
+      dashboardFixture,
+      detailFixture,
+      {
+        action: "APPROVE",
+        activeStatus: "PENDING",
+        timestamp: "2026-11-03T00:00:00.000Z",
+      },
+    );
+
+    expect(optimistic.detail).toMatchObject({
+      status: "APPROVED",
+      version: 1,
+      updatedAt: "2026-11-03T00:00:00.000Z",
+    });
+    expect(optimistic.data?.stats).toMatchObject({ pending: 0, approved: 1 });
+    expect(optimistic.data?.queue).toMatchObject({
+      items: [],
+      total: 0,
+      pageCount: 0,
+    });
+    expect(optimistic.data?.recentActivity).toEqual([]);
+    expect(optimistic.detail.moderationLogs).toEqual([]);
+  });
+
+  it("adds server-confirmed audit data without changing optimistic counts twice", () => {
+    const optimistic = applyOptimisticModeration(
+      dashboardFixture,
+      detailFixture,
+      {
+        action: "APPROVE",
+        activeStatus: "PENDING",
+        timestamp: "2026-11-03T00:00:00.000Z",
+      },
+    );
+    const confirmed = applyConfirmedModeration(
+      optimistic.data,
+      optimistic.detail,
+      {
+        kind: "MODERATION",
+        id: detailFixture.id,
+        status: "APPROVED",
+        version: 1,
+        updatedAt: "2026-11-03T00:00:01.000Z",
+        publishedAt: null,
+        publicationReference: null,
+        activity: {
+          id: "22222222-2222-4222-8222-222222222222",
+          action: "APPROVE",
+          fromStatus: "PENDING",
+          toStatus: "APPROVED",
+          note: null,
+          createdAt: "2026-11-03T00:00:01.000Z",
+          menfessId: detailFixture.id,
+          actor: { name: "Admin" },
+        },
+      },
+    );
+
+    expect(confirmed.data?.stats).toMatchObject({ pending: 0, approved: 1 });
+    expect(confirmed.data?.recentActivity).toHaveLength(1);
+    expect(confirmed.detail?.moderationLogs).toHaveLength(1);
+    expect(confirmed.detail?.moderationLogs[0]).toMatchObject({
+      action: "APPROVE",
+      actor: { name: "Admin" },
+    });
+  });
+
+  it("rolls optimistic state back when the server request fails", async () => {
+    const state = { value: "PENDING" };
+    const confirm = vi.fn();
+
+    await expect(
+      runOptimisticModerationRequest({
+        apply: () => {
+          state.value = "APPROVED";
+        },
+        request: async () => {
+          throw new Error("Server unavailable");
+        },
+        confirm,
+        rollback: () => {
+          state.value = "PENDING";
+        },
+      }),
+    ).rejects.toThrow("Server unavailable");
+
+    expect(state.value).toBe("PENDING");
+    expect(confirm).not.toHaveBeenCalled();
   });
 });

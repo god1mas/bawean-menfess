@@ -270,7 +270,15 @@ export function createAdminModerationRepository(database: ModerationDatabase) {
             throw new ModerationError("CONFLICT");
           }
 
-          await transaction.$executeRaw`
+          const activityAction = input.action === "PUBLISH"
+            ? "MARK_PUBLISHED"
+            : input.action;
+          const note = input.action === "PUBLISH" && input.publicationReference
+            ? `Referensi Instagram: ${input.publicationReference}`
+            : input.reason?.trim() || null;
+          const [activity] = await transaction.$queryRaw<
+            Array<{ id: string; createdAt: Date }>
+          >`
             INSERT INTO app_private.moderation_log (
               menfess_id,
               actor_user_id,
@@ -284,18 +292,36 @@ export function createAdminModerationRepository(database: ModerationDatabase) {
               ${input.id}::uuid,
               ${input.actorUserId}::uuid,
               ${randomUUID()}::uuid,
-              ${input.action === "PUBLISH" ? "MARK_PUBLISHED" : input.action}::app_private."ModerationAction",
+              ${activityAction}::app_private."ModerationAction",
               ${current.status}::app_private."MenfessStatus",
               ${nextStatus}::app_private."MenfessStatus",
-              ${
-                input.action === "PUBLISH" && input.publicationReference
-                  ? `Referensi Instagram: ${input.publicationReference}`
-                  : input.reason?.trim() || null
-              }
+              ${note}
             )
+            RETURNING id, created_at AS "createdAt"
           `;
+          if (!activity) {
+            throw new Error("Moderation log returned no record.");
+          }
 
-          return { id: input.id, status: nextStatus, version: input.expectedVersion + 1 };
+          return {
+            id: input.id,
+            status: nextStatus,
+            version: input.expectedVersion + 1,
+            updatedAt: now,
+            publishedAt: input.action === "PUBLISH" ? now : null,
+            publicationReference:
+              input.action === "PUBLISH"
+                ? input.publicationReference ?? null
+                : null,
+            activity: {
+              id: activity.id,
+              action: activityAction,
+              fromStatus: current.status,
+              toStatus: nextStatus,
+              note,
+              createdAt: activity.createdAt,
+            },
+          };
         });
       } catch (error) {
         if (error instanceof ModerationError) {

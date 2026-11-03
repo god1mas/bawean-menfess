@@ -301,24 +301,50 @@ export function createAdminModerationHandlers(
         const publicationReference = normalizeInstagramPublicationReference(
           parsed.data.publicationReference,
         );
-        const result = parsed.data.action === "REMOVE_PUBLICATION"
-          ? await dependencies.repository.recordPublicationRemoval({
-              id,
-              actorUserId: access.authorization.user.id,
-              reason: parsed.data.reason ?? "",
-            })
-          : await dependencies.repository.moderate({
-              id,
-              actorUserId: access.authorization.user.id,
-              action: parsed.data.action,
-              expectedVersion: parsed.data.expectedVersion,
-              ...(parsed.data.action === "REJECT" && parsed.data.reason
-                ? { reason: parsed.data.reason }
-                : {}),
-              ...(publicationReference ? { publicationReference } : {}),
-            });
+        if (parsed.data.action === "REMOVE_PUBLICATION") {
+          const result = await dependencies.repository.recordPublicationRemoval({
+            id,
+            actorUserId: access.authorization.user.id,
+            reason: parsed.data.reason ?? "",
+          });
+          return json(
+            {
+              result: {
+                kind: "PUBLICATION_REMOVAL",
+                ...result,
+                reason: parsed.data.reason ?? "",
+                actor: { name: access.authorization.user.name },
+              },
+            },
+            200,
+          );
+        }
 
-        return json({ result }, 200);
+        const result = await dependencies.repository.moderate({
+          id,
+          actorUserId: access.authorization.user.id,
+          action: parsed.data.action,
+          expectedVersion: parsed.data.expectedVersion,
+          ...(parsed.data.action === "REJECT" && parsed.data.reason
+            ? { reason: parsed.data.reason }
+            : {}),
+          ...(publicationReference ? { publicationReference } : {}),
+        });
+
+        return json(
+          {
+            result: {
+              kind: "MODERATION",
+              ...result,
+              activity: {
+                ...result.activity,
+                menfessId: id,
+                actor: { name: access.authorization.user.name },
+              },
+            },
+          },
+          200,
+        );
       } catch (error) {
         if (error instanceof ModerationError) {
           return moderationErrorResponse(error);

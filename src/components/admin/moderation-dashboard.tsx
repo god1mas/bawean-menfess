@@ -12,7 +12,7 @@ import { normalizeInstagramPublicationReference } from "@/lib/instagram-publicat
 export type Status = "PENDING" | "APPROVED" | "REJECTED" | "PUBLISHED";
 export type ModerationAction = "APPROVE" | "REJECT" | "PUBLISH" | "REMOVE_PUBLICATION";
 type Category = { slug: string; label: string; isActive: boolean };
-type QueueItem = {
+export type QueueItem = {
   id: string;
   message: string;
   status: Status;
@@ -68,6 +68,31 @@ export type Detail = QueueItem & {
     actor: { name: string };
   }>;
 };
+
+export type DetailCache = Map<string, Detail>;
+
+export function detailCacheKey(item: Pick<QueueItem, "id" | "version">) {
+  return `${item.id}:${item.version}`;
+}
+
+export function readCachedDetail(
+  cache: DetailCache,
+  item: Pick<QueueItem, "id" | "version">,
+) {
+  return cache.get(detailCacheKey(item));
+}
+
+export function storeCachedDetail(cache: DetailCache, detail: Detail) {
+  invalidateCachedDetail(cache, detail.id);
+  cache.set(detailCacheKey(detail), detail);
+}
+
+export function invalidateCachedDetail(cache: DetailCache, id: string) {
+  const prefix = `${id}:`;
+  for (const key of cache.keys()) {
+    if (key.startsWith(prefix)) cache.delete(key);
+  }
+}
 
 type ModerationMutationResult = {
   kind: "MODERATION";
@@ -303,6 +328,11 @@ export function ModerationDashboard() {
   const [data, setData] = useState<DashboardData>();
   const [detail, setDetail] = useState<Detail>();
   const [selectedId, setSelectedId] = useState<string>();
+  const [selectedPreview, setSelectedPreview] = useState<QueueItem>();
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string>();
+  const [detailSource, setDetailSource] = useState<"server" | "cache">();
+  const [detailRetry, setDetailRetry] = useState(0);
   const [status, setStatus] = useState<Status | "">("PENDING");
   const [category, setCategory] = useState("");
   const [sort, setSort] = useState<"asc" | "desc">("desc");
@@ -318,6 +348,15 @@ export function ModerationDashboard() {
   const [confirmation, setConfirmation] = useState<ModerationAction>();
   const actingRef = useRef(false);
   const actionTrigger = useRef<HTMLElement | null>(null);
+  const detailCache = useRef<DetailCache>(new Map());
+  const detailRequest = useRef<
+    | {
+        key: string;
+        controller: AbortController;
+        promise: Promise<Detail>;
+      }
+    | undefined
+  >(undefined);
   const query = useMemo(() => {
     const params = new URLSearchParams({
       page: String(page),
@@ -331,6 +370,10 @@ export function ModerationDashboard() {
   }, [appliedSearch, category, page, sort, status]);
   const selectedDetail =
     selectedId && detail?.id === selectedId ? detail : undefined;
+  const selectedQueuePreview =
+    selectedId && selectedPreview?.id === selectedId
+      ? selectedPreview
+      : undefined;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -357,26 +400,112 @@ export function ModerationDashboard() {
   }, [query]);
 
   useEffect(() => {
-    if (!selectedId) return;
-    const controller = new AbortController();
-    fetch(`/api/admin/moderation/${selectedId}`, {
-      cache: "no-store",
-      signal: controller.signal,
-    })
-      .then(readResponse<{ item: Detail }>)
-      .then(({ item }) => setDetail(item))
-      .catch((reasonValue: unknown) => {
+    if (!selectedId || !selectedQueuePreview) return;
+    const requestKey = detailCacheKey(selectedQueuePreview);
+    const cached = readCachedDetail(detailCache.current, selectedQueuePreview);
+
+    if (cached) {
+      if (detailRequest.current?.key !== requestKey) {
+        detailRequest.current?.controller.abort();
+      }
+      setDetail(cached);
+      setDetailLoading(false);
+      setDetailError(undefined);
+      setDetailSource("cache");
+      return;
+    }
+
+    if (detailRequest.current?.key !== requestKey) {
+      detailRequest.current?.controller.abort();
+      const controller = new AbortController();
+      const promise = fetch(`/api/admin/moderation/${selectedId}`, {
+        cache: "no-store",
+        signal: controller.signal,
+      })
+        .then(readResponse<{ item: Detail }>)
+        .then(({ item }) => item);
+      const request = { key: requestKey, controller, promise };
+      detailRequest.current = request;
+      void promise.then(
+        () => {
+          if (detailRequest.current === request) detailRequest.current = undefined;
+        },
+        () => {
+          if (detailRequest.current === request) detailRequest.current = undefined;
+        },
+      );
+    }
+
+    const request = detailRequest.current;
+    if (!request) return;
+    let current = true;
+    setDetailLoading(true);
+    setDetailError(undefined);
+    setDetailSource(undefined);
+
+    void request.promise.then(
+      (item) => {
+        storeCachedDetail(detailCache.current, item);
+        if (!current) return;
+        setDetail(item);
+        setDetailLoading(false);
+        setDetailSource("server");
+        if (item.version !== selectedQueuePreview.version) {
+          setSelectedPreview(item);
+        }
+      },
+      (reasonValue: unknown) => {
+        if (!current) return;
         if (reasonValue instanceof DOMException && reasonValue.name === "AbortError") {
           return;
         }
-        setActionError(
+        setDetailLoading(false);
+        setDetailError(
           reasonValue instanceof Error
             ? reasonValue.message
             : "Detail belum dapat dimuat.",
         );
-      });
-    return () => controller.abort();
-  }, [selectedId]);
+      },
+    );
+
+    return () => {
+      current = false;
+    };
+  }, [detailRetry, selectedId, selectedQueuePreview]);
+
+  useEffect(
+    () => () => {
+      detailRequest.current?.controller.abort();
+      detailCache.current.clear();
+    },
+    [],
+  );
+
+  function selectQueueItem(item: QueueItem) {
+    const cached = readCachedDetail(detailCache.current, item);
+    if (!cached) invalidateCachedDetail(detailCache.current, item.id);
+    setActionError(undefined);
+    setDetailError(undefined);
+    setDetail(cached);
+    setDetailLoading(!cached);
+    setDetailSource(cached ? "cache" : undefined);
+    setReason("");
+    setPublicationReference("");
+    setSelectedPreview(item);
+    setSelectedId(item.id);
+  }
+
+  function retrySelectedDetail() {
+    if (!selectedQueuePreview) return;
+    invalidateCachedDetail(detailCache.current, selectedQueuePreview.id);
+    detailRequest.current?.controller.abort();
+    detailRequest.current = undefined;
+    setDetail(undefined);
+    setDetailError(undefined);
+    setDetailLoading(true);
+    setDetailSource(undefined);
+    setDetailRetry((value) => value + 1);
+  }
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -415,8 +544,10 @@ export function ModerationDashboard() {
       await runOptimisticModerationRequest({
         apply: () => {
           if (!optimistic) return;
+          invalidateCachedDetail(detailCache.current, previousDetail.id);
           setData(optimistic.data);
           setDetail(optimistic.detail);
+          setDetailSource(undefined);
         },
         request: async () => {
           const response = await fetch(
@@ -440,33 +571,54 @@ export function ModerationDashboard() {
         },
         confirm: ({ result }) => {
           if (result.kind === "MODERATION") {
+            const confirmedDetail = applyConfirmedModeration(
+              undefined,
+              optimistic?.detail ?? previousDetail,
+              result,
+            ).detail;
+            if (confirmedDetail) {
+              storeCachedDetail(detailCache.current, confirmedDetail);
+            }
             setData((current) =>
               applyConfirmedModeration(current, undefined, result).data,
             );
             setDetail((current) =>
               applyConfirmedModeration(undefined, current, result).detail,
             );
+            setSelectedPreview((current) =>
+              current?.id === result.id
+                ? {
+                    ...current,
+                    status: result.status,
+                    version: result.version,
+                  }
+                : current,
+            );
+            setDetailSource("server");
             return;
           }
+          const updatedDetail = {
+            ...previousDetail,
+            publicationRemoval: {
+              reason: result.reason,
+              removedAt: result.removedAt,
+              actor: result.actor,
+            },
+          };
+          storeCachedDetail(detailCache.current, updatedDetail);
           setDetail((current) =>
-            current?.id === result.menfessId
-              ? {
-                  ...current,
-                  publicationRemoval: {
-                    reason: result.reason,
-                    removedAt: result.removedAt,
-                    actor: result.actor,
-                  },
-                }
-              : current,
+            current?.id === result.menfessId ? updatedDetail : current,
           );
+          setDetailSource("server");
         },
         rollback: () => {
           if (!optimistic) return;
+          storeCachedDetail(detailCache.current, previousDetail);
           setData(previousData);
           setDetail((current) =>
             current?.id === previousDetail.id ? previousDetail : current,
           );
+          setDetailSource("cache");
         },
       });
       setReason("");
@@ -528,7 +680,12 @@ export function ModerationDashboard() {
       ]);
       setData(next);
       if (nextDetail) {
+        storeCachedDetail(detailCache.current, nextDetail.item);
         setDetail(nextDetail.item);
+        setSelectedPreview(nextDetail.item);
+        setDetailLoading(false);
+        setDetailError(undefined);
+        setDetailSource("server");
       }
     } finally {
       if (blocking) setLoading(false);
@@ -695,12 +852,7 @@ export function ModerationDashboard() {
                   <li key={item.id}>
                     <button
                       type="button"
-                      onClick={() => {
-                        setActionError(undefined);
-                        setReason("");
-                        setPublicationReference("");
-                        setSelectedId(item.id);
-                      }}
+                      onClick={() => selectQueueItem(item)}
                       aria-pressed={selectedId === item.id}
                       className={`block w-full px-5 py-4 text-left transition-colors hover:bg-bm-admin-surface-soft focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-bm-brand md:px-6 ${
                         selectedId === item.id ? "bg-bm-mint/60" : ""
@@ -765,10 +917,15 @@ export function ModerationDashboard() {
         <div className="space-y-6">
           <SubmissionDetail
             detail={selectedDetail}
+            preview={selectedQueuePreview}
             selected={Boolean(selectedId)}
+            detailError={detailError}
+            detailLoading={detailLoading}
+            detailSource={detailSource}
             reason={reason}
             onReasonChange={setReason}
             onAction={requestConfirmation}
+            onRetry={retrySelectedDetail}
             actionError={actionError}
             acting={acting}
           />
@@ -822,30 +979,41 @@ function statusStyle(status: Status) {
   return "bg-stone-100 text-stone-700";
 }
 
-function SubmissionDetail({
+export function SubmissionDetail({
   detail,
+  preview,
   selected,
+  detailError,
+  detailLoading,
+  detailSource,
   reason,
   onReasonChange,
   onAction,
+  onRetry,
   actionError,
   acting,
 }: {
   detail?: Detail;
+  preview?: QueueItem;
   selected: boolean;
+  detailError?: string;
+  detailLoading: boolean;
+  detailSource?: "server" | "cache";
   reason: string;
   onReasonChange: (value: string) => void;
   onAction: (action: ModerationAction) => void;
+  onRetry: () => void;
   actionError?: string;
   acting: boolean;
 }) {
+  const displayItem = detail ?? preview;
   const safePublicationReference = normalizeInstagramPublicationReference(
     detail?.publicationReference ?? undefined,
   );
 
   return (
     <section
-      aria-busy={acting || undefined}
+      aria-busy={acting || detailLoading || undefined}
       className="rounded-[22px] border border-bm-border bg-white p-5 shadow-sm md:p-6"
     >
       <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-bm-gold">
@@ -857,29 +1025,21 @@ function SubmissionDetail({
           Pilih kiriman dari antrean untuk membaca riwayat dan mengambil tindakan.
         </p>
       ) : null}
-      {selected && !detail
-        ? actionError
-          ? (
-              <p className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800" role="alert">
-                {actionError}
-              </p>
-            )
-          : (
-              <p className="mt-4 text-sm text-bm-muted" role="status">
-                Memuat detail…
-              </p>
-            )
-        : null}
-      {detail ? (
+      {selected && !displayItem ? (
+        <p className="mt-4 text-sm text-bm-muted" role="status">
+          Menyiapkan detail…
+        </p>
+      ) : null}
+      {displayItem ? (
         <>
           <div className="mt-5 flex flex-wrap items-center gap-2">
-            <span className={`rounded-full px-3 py-1.5 text-xs font-bold ${statusStyle(detail.status)}`}>
-              {statusLabels[detail.status]}
+            <span className={`rounded-full px-3 py-1.5 text-xs font-bold ${statusStyle(displayItem.status)}`}>
+              {statusLabels[displayItem.status]}
             </span>
-            <span className="text-xs font-bold text-bm-gold">{detail.category.label}</span>
+            <span className="text-xs font-bold text-bm-gold">{displayItem.category.label}</span>
           </div>
           <p className="mt-3 text-xs text-bm-muted">
-            Dikirim {formatDate(detail.submittedAt)} · versi {detail.version}
+            Dikirim {formatDate(displayItem.submittedAt)} · versi {displayItem.version}
           </p>
           {acting ? (
             <p
@@ -890,8 +1050,43 @@ function SubmissionDetail({
             </p>
           ) : null}
           <div className="mt-5 max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-bm-border bg-[#fdfbf6] p-4 text-sm leading-7 text-bm-text">
-            {detail.message}
+            {displayItem.message}
           </div>
+          {detailLoading ? (
+            <div
+              aria-label="Memuat riwayat dan data publikasi"
+              className="mt-4 space-y-2 rounded-xl border border-bm-border bg-bm-admin-surface-soft p-4"
+              role="status"
+            >
+              <p className="text-xs font-semibold text-bm-muted">
+                Memuat riwayat dan data publikasi…
+              </p>
+              <span className="block h-2.5 w-4/5 animate-pulse rounded-full bg-bm-border" />
+              <span className="block h-2.5 w-3/5 animate-pulse rounded-full bg-bm-border" />
+            </div>
+          ) : null}
+          {detailError ? (
+            <div
+              className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"
+              role="alert"
+            >
+              <p>{detailError}</p>
+              <button
+                className="mt-3 rounded-lg border border-red-300 bg-white px-3 py-2 text-xs font-bold text-red-800 hover:bg-red-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-700"
+                onClick={onRetry}
+                type="button"
+              >
+                Coba lagi
+              </button>
+            </div>
+          ) : null}
+          {detailSource === "cache" && detail ? (
+            <p className="mt-3 text-[11px] leading-5 text-bm-muted" role="status">
+              Detail versi {detail.version} ditampilkan dari cache sesi. Gunakan Muat ulang untuk sinkronisasi manual.
+            </p>
+          ) : null}
+          {detail ? (
+            <>
           <p className="mt-3 text-xs leading-5 text-bm-muted">
             {detail.trackingCredentials}
           </p>
@@ -1004,6 +1199,8 @@ function SubmissionDetail({
                 </button>
               </div>
             )
+          ) : null}
+            </>
           ) : null}
         </>
       ) : null}

@@ -5,11 +5,17 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyConfirmedModeration,
   applyOptimisticModeration,
+  detailCacheKey,
+  invalidateCachedDetail,
   ModerationConfirmationDialog,
   ModerationDashboard,
+  readCachedDetail,
   runModerationActionOnce,
   runOptimisticModerationRequest,
+  storeCachedDetail,
+  SubmissionDetail,
   type DashboardData,
+  type DetailCache,
   type Detail,
 } from "../../src/components/admin/moderation-dashboard";
 
@@ -247,5 +253,69 @@ describe("administrator dashboard anchor navigation", () => {
 
     expect(state.value).toBe("PENDING");
     expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("renders queue data immediately while supplemental detail is loading", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SubmissionDetail, {
+        preview: detailFixture,
+        selected: true,
+        detailLoading: true,
+        reason: "",
+        onReasonChange: () => undefined,
+        onAction: () => undefined,
+        onRetry: () => undefined,
+        acting: false,
+      }),
+    );
+
+    expect(markup).toContain("Pesan yang sedang ditinjau.");
+    expect(markup).toContain("Curhat");
+    expect(markup).toContain("Menunggu");
+    expect(markup).toContain("Memuat riwayat dan data publikasi");
+    expect(markup).not.toContain("Memuat detail");
+    expect(markup).not.toContain("Riwayat moderasi");
+  });
+
+  it("shows a retry action without hiding the queue preview when detail fails", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SubmissionDetail, {
+        preview: detailFixture,
+        selected: true,
+        detailError: "Detail belum dapat dimuat.",
+        detailLoading: false,
+        reason: "",
+        onReasonChange: () => undefined,
+        onAction: () => undefined,
+        onRetry: () => undefined,
+        acting: false,
+      }),
+    );
+
+    expect(markup).toContain("Pesan yang sedang ditinjau.");
+    expect(markup).toContain("Detail belum dapat dimuat.");
+    expect(markup).toContain("Coba lagi");
+  });
+
+  it("keys the session cache by id and version and removes stale versions", () => {
+    const cache: DetailCache = new Map();
+    storeCachedDetail(cache, detailFixture);
+
+    expect(readCachedDetail(cache, detailFixture)).toBe(detailFixture);
+    expect(
+      readCachedDetail(cache, { ...detailFixture, version: 1 }),
+    ).toBeUndefined();
+
+    const nextVersion = {
+      ...detailFixture,
+      status: "APPROVED" as const,
+      version: 1,
+    };
+    storeCachedDetail(cache, nextVersion);
+
+    expect(cache.has(detailCacheKey(detailFixture))).toBe(false);
+    expect(readCachedDetail(cache, nextVersion)).toBe(nextVersion);
+    invalidateCachedDetail(cache, detailFixture.id);
+    expect(cache.size).toBe(0);
   });
 });

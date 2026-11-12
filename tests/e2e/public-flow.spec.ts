@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import sharp from "sharp";
 
 const categories = [
   { slug: "confess", label: "Confess" },
@@ -71,6 +72,34 @@ test("shows accessible validation without submitting invalid form", async ({ pag
   await expect(page.getByText("Pilih kategori terlebih dahulu.")).toBeVisible();
   await expect(page.getByText("Pesan menfess wajib diisi.")).toBeVisible();
   expect(requests).toBe(0);
+});
+
+test("previews, removes, and submits one optional photo as multipart", async ({ page }) => {
+  const bytes = await sharp({ create: { width: 8, height: 8, channels: 3, background: "green" } })
+    .png().toBuffer();
+  await page.route("**/api/public/menfess", async (route) => {
+    expect(route.request().headers()["content-type"]).toContain("multipart/form-data");
+    const body = route.request().postDataBuffer();
+    expect(body?.includes(bytes)).toBe(true);
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({ trackingCode, trackingPath: `/lacak#t=${trackingToken}` }),
+    });
+  });
+
+  await page.goto("/kirim");
+  const input = page.getByLabel("Foto (opsional)");
+  await input.setInputFiles({ name: "photo.png", mimeType: "image/png", buffer: bytes });
+  await expect(page.getByRole("img", { name: "Pratinjau foto terpilih" })).toBeVisible();
+  await page.getByRole("button", { name: "Hapus foto" }).click();
+  await expect(page.getByRole("img", { name: "Pratinjau foto terpilih" })).toHaveCount(0);
+  await input.setInputFiles({ name: "photo.png", mimeType: "image/png", buffer: bytes });
+  await page.getByText("Curhat", { exact: true }).click();
+  await page.getByLabel("Pesan Menfess").fill("Foto uji untuk menfess.");
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: /Kirim Menfess/ }).click();
+  await expect(page.getByRole("heading", { name: "Menfess berhasil dikirim." })).toBeVisible();
 });
 
 test("looks up a private tracking link and removes the fragment", async ({ page }) => {

@@ -13,6 +13,7 @@ export default function PrivacyPage() {
       <section className="mt-8 text-sm leading-7 text-bm-muted"><h2 className="text-xl font-bold text-bm-brand">Data yang diproses</h2><ul className="mt-3 list-disc space-y-2 pl-5">
         <li>Pengunjung tidak perlu membuat akun untuk mengirim menfess.</li>
         <li>Kategori, isi pesan, status, waktu, dan referensi publikasi bila ada disimpan untuk moderasi.</li>
+        <li>Jika kamu memilih foto, gambar diproses untuk menghapus metadata seperti lokasi, lalu disimpan sementara di penyimpanan privat. Administrator dapat melihat dan mengunduhnya untuk moderasi dan publikasi manual.</li>
         <li>Kode dan token pelacakan hanya disimpan sebagai digest HMAC berversi; simpan nilai asli karena layanan tidak dapat memulihkannya.</li>
         <li>Alamat jaringan diproses untuk menghasilkan digest HMAC pembatasan permintaan dan tidak disimpan sebagai alamat asli pada tabel pembatasan publik.</li>
         <li>Tindakan administrator dan catatan penghapusan publikasi disimpan untuk akuntabilitas.</li>
@@ -21,6 +22,7 @@ export default function PrivacyPage() {
       <section className="mt-8 text-sm leading-7 text-bm-muted"><h2 className="text-xl font-bold text-bm-brand">Retensi yang ditargetkan</h2><ul className="mt-3 list-disc space-y-2 pl-5">
         <li>PENDING: 90 hari setelah dikirim.</li><li>APPROVED yang belum terbit: 90 hari setelah disetujui.</li><li>REJECTED: 90 hari setelah ditolak.</li><li>PUBLISHED: 365 hari setelah publikasi.</li>
       </ul><p className="mt-3">Catatan audit terkait mengikuti masa simpan kiriman. Penahanan yang diwajibkan hukum dapat memperpanjangnya. Pelaksanaan bergantung pada pemeliharaan terjadwal; kegagalan infrastruktur dapat menunda penghapusan. Kredensial pelacakan berhenti berfungsi setelah kiriman dihapus.</p></section>
+      <p className="mt-3 text-sm leading-7 text-bm-muted">Foto tetap tersedia selama status PENDING atau APPROVED. Setelah penolakan atau konfirmasi publikasi manual, sistem menjadwalkan penghapusan foto dari penyimpanan aktif dan mencoba ulang jika gagal. Penghapusan dapat tertunda saat layanan terganggu; salinan cadangan penyedia mungkin memiliki masa simpan terpisah.</p>
       <section className="mt-8 text-sm leading-7 text-bm-muted"><h2 className="text-xl font-bold text-bm-brand">Cadangan dan kontak</h2>
         <p className="mt-3">Penghapusan dari basis data aktif tidak selalu langsung menghapus salinan cadangan. Konfigurasi dan masa simpan cadangan proyek masih harus diverifikasi sebelum peluncuran. Setelah pemulihan cadangan, penghapusan yang terjadi setelah titik pemulihan harus diterapkan kembali.</p>
         <p className="mt-3">Pertanyaan privasi dan laporan dapat dikirim ke <a className="font-bold text-bm-brand underline" href="https://www.instagram.com/baweanmenfess/">@baweanmenfess</a>. Tidak ada tenggat respons operasional yang dijanjikan selain kewajiban hukum yang berlaku.</p>

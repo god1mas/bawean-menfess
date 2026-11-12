@@ -120,13 +120,18 @@ export function createAdminModerationRepository(database: ModerationDatabase) {
             status: true,
             version: true,
             submittedAt: true,
+            photo: { select: { state: true } },
             category: { select: { slug: true, label: true } },
           },
         }),
       ]);
 
       return {
-        items,
+        items: items.map(({ photo, ...item }) => ({
+          ...item,
+          hasPhoto: photo?.state === "ATTACHED" &&
+            (item.status === "PENDING" || item.status === "APPROVED"),
+        })),
         total,
         page: query.page,
         pageSize: query.pageSize,
@@ -146,6 +151,7 @@ export function createAdminModerationRepository(database: ModerationDatabase) {
           updatedAt: true,
           publishedAt: true,
           publicationReference: true,
+          photo: { select: { state: true, contentType: true, byteSize: true } },
           publicationRemoval: {
             select: {
               reason: true,
@@ -301,6 +307,13 @@ export function createAdminModerationRepository(database: ModerationDatabase) {
           `;
           if (!activity) {
             throw new Error("Moderation log returned no record.");
+          }
+
+          if (nextStatus === "REJECTED" || nextStatus === "PUBLISHED") {
+            await transaction.menfessPhoto.updateMany({
+              where: { menfessId: input.id, state: "ATTACHED" },
+              data: { state: "DELETE_PENDING", updatedAt: now },
+            });
           }
 
           return {

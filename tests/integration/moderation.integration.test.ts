@@ -85,6 +85,62 @@ describe("moderation workflow on PostgreSQL 17", () => {
     return { id: stored.id, credentials: result.credentials };
   }
 
+  it("attaches one private photo and retains it until a terminal moderation commit", async () => {
+    const photoId = randomUUID();
+    const path = `photos/${randomUUID()}.png`;
+    const digest = Uint8Array.from(randomBytes(32));
+    await runtime.$queryRaw`
+      INSERT INTO app_private.menfess_photo
+        (id, object_path, content_type, byte_size, content_sha256, state)
+      VALUES (${photoId}::uuid, ${path}, 'image/png', 72, ${digest}, 'STAGED')
+      RETURNING id
+    `;
+    const message = `${prefix} photo approval`;
+    const submitted = await publicRepository.submitMenfess(
+      "curhat", message, `bmi_${randomBytes(32).toString("base64url")}`,
+      { id: photoId, contentSha256: digest },
+    );
+    expect(submitted.kind).toBe("created");
+    const menfess = await owner.menfess.findFirstOrThrow({ where: { message } });
+    const pending = await runtime.menfessPhoto.findUniqueOrThrow({ where: { id: photoId } });
+    expect(pending).toMatchObject({ menfessId: menfess.id, state: "ATTACHED" });
+    expect((await moderation.list({ page: 1, pageSize: 50, status: "PENDING", sort: "desc" })).items.find((item) => item.id === menfess.id)?.hasPhoto).toBe(true);
+    expect((await moderation.detail(menfess.id))?.photo?.state).toBe("ATTACHED");
+
+    await moderation.moderate({ id: menfess.id, actorUserId: adminId, action: "APPROVE", expectedVersion: 0 });
+    expect((await runtime.menfessPhoto.findUniqueOrThrow({ where: { id: photoId } })).state).toBe("ATTACHED");
+    await moderation.moderate({ id: menfess.id, actorUserId: adminId, action: "PUBLISH", expectedVersion: 1 });
+    expect((await runtime.menfessPhoto.findUniqueOrThrow({ where: { id: photoId } })).state).toBe("DELETE_PENDING");
+    expect(await owner.moderationLog.count({ where: { menfessId: menfess.id } })).toBe(2);
+    await expect(runtime.menfessPhoto.updateMany({ where: { id: photoId }, data: { objectPath: `photos/${randomUUID()}.png` } })).rejects.toThrow();
+    expect((await runtime.menfessPhoto.updateMany({
+      where: { id: photoId, state: "DELETE_PENDING" },
+      data: { state: "CLEANING", updatedAt: new Date() },
+    })).count).toBe(1);
+    expect((await runtime.menfessPhoto.deleteMany({ where: { id: photoId, state: "CLEANING" } })).count).toBe(1);
+  });
+
+  it("marks a rejected photo for cleanup only after rejection commits", async () => {
+    const photoId = randomUUID();
+    const digest = Uint8Array.from(randomBytes(32));
+    await runtime.$queryRaw`
+      INSERT INTO app_private.menfess_photo
+        (id, object_path, content_type, byte_size, content_sha256, state)
+      VALUES (${photoId}::uuid, ${`photos/${randomUUID()}.png`}, 'image/png', 72, ${digest}, 'STAGED')
+      RETURNING id
+    `;
+    const message = `${prefix} photo rejection`;
+    const result = await publicRepository.submitMenfess("curhat", message, `bmi_${randomBytes(32).toString("base64url")}`, {
+      id: photoId, contentSha256: digest,
+    });
+    expect(result.kind).toBe("created");
+    const menfess = await owner.menfess.findFirstOrThrow({ where: { message } });
+    await expect(moderation.moderate({ id: menfess.id, actorUserId: adminId, action: "PUBLISH", expectedVersion: 0 })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+    expect((await runtime.menfessPhoto.findUniqueOrThrow({ where: { id: photoId } })).state).toBe("ATTACHED");
+    await moderation.moderate({ id: menfess.id, actorUserId: adminId, action: "REJECT", expectedVersion: 0, reason: "Tidak sesuai aturan." });
+    expect((await runtime.menfessPhoto.findUniqueOrThrow({ where: { id: photoId } })).state).toBe("DELETE_PENDING");
+  });
+
   it("approves and publishes with matching append-only audit history and tracking state", async () => {
     const { id, credentials } = await submission("approve and publish");
     await expect(

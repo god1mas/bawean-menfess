@@ -133,10 +133,31 @@ model Menfess {
   category               Category        @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   moderationLogs         ModerationLog[]
   publicationRemoval     PublicationRemoval?
+  photo                   MenfessPhoto?
 
   @@index([status, submittedAt(sort: Desc)])
   @@index([categoryId, submittedAt(sort: Desc)])
   @@map("menfess")
+  @@schema("app_private")
+}
+
+// A staged row is written before Storage upload, so interrupted uploads can be
+// reconciled. Terminal moderation marks the row for deletion in the same DB
+// transaction; the Storage operation is retried independently.
+model MenfessPhoto {
+  id            String   @id @default(dbgenerated("pg_catalog.gen_random_uuid()")) @db.Uuid
+  menfessId     String?  @unique @map("menfess_id") @db.Uuid
+  objectPath    String   @unique @map("object_path") @db.VarChar(160)
+  contentType   String   @map("content_type") @db.VarChar(16)
+  byteSize      Int      @map("byte_size")
+  contentSha256 Bytes    @map("content_sha256") @db.ByteA
+  state         String   @db.VarChar(16)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  menfess       Menfess? @relation(fields: [menfessId], references: [id], onDelete: Restrict)
+
+  @@index([state, createdAt])
+  @@map("menfess_photo")
   @@schema("app_private")
 }
 

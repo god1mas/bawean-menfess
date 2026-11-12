@@ -4,5 +4,11 @@
     "deploymentEnabled": {
       "release/bawean-menfess-v1": false
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/internal/photo-cleanup",
+      "schedule": "0 3 * * *"
+    }
+  ]
 }

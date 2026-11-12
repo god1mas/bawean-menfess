@@ -62,6 +62,7 @@ const actionSchema = z
 export type AdminModerationApiDependencies = {
   resolveAuthorization: (headers: Headers) => Promise<AdminAuthorization>;
   repository: AdminModerationRepository;
+  schedulePhotoCleanup?: (menfessId: string) => void;
   baseUrl?: string;
   nodeEnv?: string;
 };
@@ -257,6 +258,12 @@ export function createAdminModerationHandlers(
               {
                 item: {
                   ...item,
+                  hasPhoto: item.photo?.state === "ATTACHED" &&
+                    (item.status === "PENDING" || item.status === "APPROVED"),
+                  photo: item.photo?.state === "ATTACHED" &&
+                    (item.status === "PENDING" || item.status === "APPROVED")
+                    ? { contentType: item.photo.contentType, byteSize: item.photo.byteSize }
+                    : null,
                   trackingCredentials: "Kode dan token pelacakan tidak dapat dipulihkan.",
                 },
               },
@@ -330,6 +337,14 @@ export function createAdminModerationHandlers(
             : {}),
           ...(publicationReference ? { publicationReference } : {}),
         });
+
+        if (result.status === "REJECTED" || result.status === "PUBLISHED") {
+          try {
+            dependencies.schedulePhotoCleanup?.(id);
+          } catch (error) {
+            logFailure("schedule-photo-cleanup", error);
+          }
+        }
 
         return json(
           {

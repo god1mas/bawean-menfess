@@ -11,9 +11,10 @@ import {
 } from "react";
 import { copyText } from "@/lib/clipboard";
 import { ClientRequestError, requestJson } from "@/lib/client-json";
+import { MAX_PHOTO_BYTES } from "@/lib/menfess-photo-constants";
 
 type Category = { slug: string; label: string };
-type FieldErrors = Partial<Record<"category" | "message" | "consent", string>>;
+type FieldErrors = Partial<Record<"category" | "message" | "consent" | "photo", string>>;
 type SubmitSuccess = { trackingCode: string; trackingPath: string };
 
 function createSubmissionIdempotencyKey() {
@@ -33,12 +34,41 @@ export function SubmitForm() {
   const [category, setCategory] = useState("");
   const [message, setMessage] = useState("");
   const [consent, setConsent] = useState(false);
+  const [photo, setPhoto] = useState<File>();
+  const [photoPreview, setPhotoPreview] = useState<string>();
   const [errors, setErrors] = useState<FieldErrors>({});
   const [requestError, setRequestError] = useState<string>();
   const [pending, setPending] = useState(false);
   const [success, setSuccess] = useState<SubmitSuccess>();
   const successHeading = useRef<HTMLHeadingElement>(null);
   const idempotencyKey = useRef<string | undefined>(undefined);
+  const photoInput = useRef<HTMLInputElement>(null);
+  const previewUrl = useRef<string | undefined>(undefined);
+
+  useEffect(() => () => {
+    if (previewUrl.current) URL.revokeObjectURL(previewUrl.current);
+  }, []);
+
+  function selectPhoto(file?: File) {
+    if (previewUrl.current) URL.revokeObjectURL(previewUrl.current);
+    previewUrl.current = undefined;
+    setPhoto(undefined);
+    setPhotoPreview(undefined);
+    setErrors((current) => ({ ...current, photo: undefined }));
+    if (!file) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      setErrors((current) => ({ ...current, photo: "Gunakan foto JPEG, PNG, atau WebP." }));
+      return;
+    }
+    if (file.size < 1 || file.size > MAX_PHOTO_BYTES) {
+      setErrors((current) => ({ ...current, photo: "Ukuran foto maksimal 1 MiB." }));
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    previewUrl.current = url;
+    setPhoto(file);
+    setPhotoPreview(url);
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -93,6 +123,7 @@ export function SubmitForm() {
     if (!consent) {
       nextErrors.consent = "Persetujuan moderasi wajib diberikan.";
     }
+    if (errors.photo) nextErrors.photo = errors.photo;
 
     setErrors(nextErrors);
     setRequestError(undefined);
@@ -105,6 +136,14 @@ export function SubmitForm() {
 
     try {
       idempotencyKey.current ??= createSubmissionIdempotencyKey();
+      const form = photo ? new FormData() : undefined;
+      if (form && photo) {
+        form.set("category", category);
+        form.set("message", message);
+        form.set("consent", String(consent));
+        form.set("idempotencyKey", idempotencyKey.current);
+        form.set("photo", photo);
+      }
       const body = await requestJson<{
         trackingCode?: string;
         trackingPath?: string;
@@ -112,8 +151,8 @@ export function SubmitForm() {
         "/api/public/menfess",
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          ...(form ? {} : { headers: { "Content-Type": "application/json" } }),
+          body: form ?? JSON.stringify({
             category,
             message,
             consent,
@@ -143,6 +182,7 @@ export function SubmitForm() {
           category: error.fields.category,
           message: error.fields.message,
           consent: error.fields.consent,
+          photo: error.fields.photo,
         });
       }
       setRequestError(
@@ -164,6 +204,8 @@ export function SubmitForm() {
           setCategory("");
           setMessage("");
           setConsent(false);
+          selectPhoto();
+          if (photoInput.current) photoInput.current.value = "";
           idempotencyKey.current = undefined;
           setSuccess(undefined);
         }}
@@ -245,6 +287,47 @@ export function SubmitForm() {
       </div>
 
       <div>
+        <label htmlFor="menfess-photo" className="text-sm font-bold text-bm-brand">
+          Foto (opsional)
+        </label>
+        <input
+          ref={photoInput}
+          id="menfess-photo"
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          disabled={pending}
+          aria-describedby="photo-help photo-error"
+          aria-invalid={Boolean(errors.photo)}
+          onChange={(event) => {
+            if (event.currentTarget.files && event.currentTarget.files.length > 1) {
+              selectPhoto();
+              setErrors((current) => ({ ...current, photo: "Pilih satu foto saja." }));
+            } else {
+              selectPhoto(event.currentTarget.files?.[0]);
+            }
+          }}
+          className="mt-2 block w-full rounded-xl border border-bm-border bg-white p-3 text-sm text-bm-text file:mr-3 file:rounded-lg file:border-0 file:bg-bm-mint file:px-3 file:py-2 file:font-bold file:text-bm-brand focus-visible:outline-2 focus-visible:outline-bm-brand"
+        />
+        <p id="photo-help" className="mt-2 text-xs leading-5 text-bm-muted">
+          Maksimal satu foto JPEG, PNG, atau WebP, ukuran 1 MiB. Foto disimpan sementara untuk moderasi dan publikasi manual.
+        </p>
+        {errors.photo ? <p id="photo-error" className="mt-2 text-xs text-red-700" role="alert">{errors.photo}</p> : null}
+        {photo && photoPreview ? (
+          <div className="mt-3 rounded-xl border border-bm-border bg-bm-page p-3">
+            {/* A local blob URL is intentionally not sent through Next image optimization. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={photoPreview} alt="Pratinjau foto terpilih" className="max-h-64 max-w-full rounded-lg object-contain" />
+            <button type="button" disabled={pending} onClick={() => {
+              selectPhoto();
+              if (photoInput.current) photoInput.current.value = "";
+            }} className="mt-3 rounded-lg border border-bm-border bg-white px-3 py-2 text-xs font-bold text-bm-brand focus-visible:outline-2 focus-visible:outline-bm-brand">
+              Hapus foto
+            </button>
+          </div>
+        ) : null}
+      </div>
+
+      <div>
         <label className="flex items-start gap-3 text-xs leading-5 text-bm-muted">
           <input
             type="checkbox"
@@ -257,7 +340,7 @@ export function SubmitForm() {
             className="mt-0.5 size-5 shrink-0 accent-[var(--bm-bg-brand)]"
           />
           <span>
-            Saya memahami bahwa pesan dan kategori akan disimpan untuk moderasi,
+            Saya memahami bahwa pesan, kategori, dan foto bila dipilih akan disimpan untuk moderasi,
             pesan dapat ditolak, dan persetujuan tidak menjamin publikasi. Saya
             telah membaca{" "}
             <Link

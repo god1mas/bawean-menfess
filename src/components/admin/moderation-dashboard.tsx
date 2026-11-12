@@ -18,6 +18,7 @@ export type QueueItem = {
   status: Status;
   version: number;
   submittedAt: string;
+  hasPhoto?: boolean;
   category: { slug: string; label: string };
 };
 type Activity = {
@@ -49,6 +50,7 @@ export type DashboardData = {
   };
 };
 export type Detail = QueueItem & {
+  photo?: { contentType: string; byteSize: number } | null;
   updatedAt: string;
   publishedAt: string | null;
   publicationReference: string | null;
@@ -196,6 +198,7 @@ export function applyOptimisticModeration(
                   ...item,
                   status: nextStatus,
                   version: detail.version + 1,
+                  hasPhoto: nextStatus === "APPROVED" && item.hasPhoto,
                 },
               ];
             }),
@@ -208,6 +211,8 @@ export function applyOptimisticModeration(
       ...detail,
       status: nextStatus,
       version: detail.version + 1,
+      hasPhoto: nextStatus === "APPROVED" && detail.hasPhoto,
+      photo: nextStatus === "APPROVED" ? detail.photo : null,
       updatedAt: input.timestamp,
       ...(input.action === "PUBLISH"
         ? {
@@ -252,6 +257,7 @@ export function applyConfirmedModeration(
                     ...item,
                     status: result.status,
                     version: result.version,
+                    hasPhoto: result.status === "APPROVED" && item.hasPhoto,
                   }
                 : item,
             ),
@@ -264,6 +270,8 @@ export function applyConfirmedModeration(
             ...detail,
             status: result.status,
             version: result.version,
+            hasPhoto: result.status === "APPROVED" && detail.hasPhoto,
+            photo: result.status === "APPROVED" ? detail.photo : null,
             updatedAt: result.updatedAt,
             publishedAt: result.publishedAt,
             publicationReference: result.publicationReference,
@@ -591,6 +599,7 @@ export function ModerationDashboard() {
                     ...current,
                     status: result.status,
                     version: result.version,
+                    hasPhoto: result.status === "APPROVED" && current.hasPhoto,
                   }
                 : current,
             );
@@ -1052,6 +1061,9 @@ export function SubmissionDetail({
           <div className="mt-5 max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-bm-border bg-[#fdfbf6] p-4 text-sm leading-7 text-bm-text">
             {displayItem.message}
           </div>
+          {displayItem.hasPhoto && (displayItem.status === "PENDING" || displayItem.status === "APPROVED") ? (
+            <AdminPhoto key={`${displayItem.id}:${displayItem.version}`} id={displayItem.id} />
+          ) : null}
           {detailLoading ? (
             <div
               aria-label="Memuat riwayat dan data publikasi"
@@ -1165,6 +1177,12 @@ export function SubmissionDetail({
                   </div>
                 </>
               ) : (
+                <>
+                {detail.hasPhoto ? (
+                  <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+                    Unduh foto dan pastikan posting Instagram sudah terbit sebelum mengonfirmasi. Setelah konfirmasi, foto pribadi ini akan dihapus.
+                  </p>
+                ) : null}
                 <button
                   type="button"
                   disabled={acting}
@@ -1173,6 +1191,7 @@ export function SubmissionDetail({
                 >
                   Tandai dipublikasikan
                 </button>
+                </>
               )}
               {actionError ? (
                 <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs leading-5 text-red-800" role="alert">
@@ -1204,6 +1223,36 @@ export function SubmissionDetail({
           ) : null}
         </>
       ) : null}
+    </section>
+  );
+}
+
+function AdminPhoto({ id }: { id: string }) {
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const url = `/api/admin/moderation/${id}/photo`;
+  return (
+    <section className="mt-4 rounded-xl border border-bm-border bg-bm-admin-surface-soft p-4">
+      <h3 className="text-sm font-bold text-bm-brand">Foto kiriman</h3>
+      {state === "loading" ? <p className="mt-2 text-xs text-bm-muted" role="status">Memuat foto…</p> : null}
+      {state === "error" ? (
+        <div className="mt-2 text-xs text-red-800" role="alert">
+          Foto belum dapat dimuat. <button type="button" className="font-bold underline" onClick={() => setState("loading")}>Coba lagi</button>
+        </div>
+      ) : null}
+      {state !== "error" ? (
+        // Authenticated same-origin binary responses must not pass through the image optimizer.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={url}
+          alt="Foto terlampir pada menfess"
+          className={`mt-3 max-h-80 max-w-full rounded-lg object-contain ${state === "loading" ? "hidden" : ""}`}
+          onLoad={() => setState("ready")}
+          onError={() => setState("error")}
+        />
+      ) : null}
+      <a href={`${url}?download=1`} download className="mt-3 inline-block rounded-lg bg-white px-3 py-2 text-xs font-bold text-bm-brand underline focus-visible:outline-2 focus-visible:outline-bm-brand">
+        Unduh foto untuk publikasi
+      </a>
     </section>
   );
 }
@@ -1310,6 +1359,12 @@ export function ModerationConfirmationDialog({
           </p>
         ) : null}
         {action === "PUBLISH" ? (
+          <>
+          {detail.hasPhoto ? (
+            <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
+              Pastikan foto sudah diunduh dan posting Instagram sudah berhasil sebelum konfirmasi. Foto akan dihapus setelah status PUBLISHED tersimpan.
+            </p>
+          ) : null}
           <label className="mt-5 block text-xs font-bold text-bm-brand">
             Tautan posting Instagram{" "}
             <span className="font-normal text-bm-muted">(opsional)</span>
@@ -1326,6 +1381,7 @@ export function ModerationConfirmationDialog({
               value={publicationReference}
             />
           </label>
+          </>
         ) : null}
         {error ? (
           <p

@@ -96,6 +96,12 @@ async function provision(port) {
           "utf8",
         ),
       );
+      await owner.query(
+        readFileSync(
+          "prisma/migrations/20261112130000_add_menfess_photo/migration.sql",
+          "utf8",
+        ),
+      );
       await owner.query(`
         INSERT INTO app_private.category (slug, label, sort_order, updated_at)
         VALUES

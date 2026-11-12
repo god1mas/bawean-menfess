@@ -17,8 +17,10 @@ import {
 
 type PublicDatabase = Pick<
   PrismaClient,
-  "$queryRaw" | "category" | "menfess"
+  "$queryRaw" | "$transaction" | "category" | "menfess"
 >;
+
+export type StagedPhoto = { id: string; contentSha256: Uint8Array<ArrayBuffer> };
 
 type RateLimitRow = {
   allowed: boolean;
@@ -91,6 +93,7 @@ export function createPublicMenfessRepository(database: PublicDatabase) {
       categorySlug: string,
       message: string,
       idempotencyKey: string,
+      photo?: StagedPhoto,
     ): Promise<SubmissionRepositoryResult> {
       const { trackingCodeKey, trackingUrlKey } = loadD2Secrets();
       const credentials = createTrackingCredentialPairForIdempotency(
@@ -100,7 +103,32 @@ export function createPublicMenfessRepository(database: PublicDatabase) {
       );
 
       try {
-        const inserted = await database.$queryRaw<Array<{ inserted: boolean }>>`
+        const inserted = photo
+          ? await database.$transaction(async (transaction) => {
+              const rows = await transaction.$queryRaw<Array<{ id: string }>>`
+                INSERT INTO app_private.menfess (
+                  category_id, message, tracking_code_digest,
+                  tracking_code_key_version, tracking_url_digest,
+                  tracking_url_key_version, updated_at
+                )
+                SELECT category.id, ${message}, ${credentials.trackingCodeDigest},
+                  ${credentials.trackingCodeKeyVersion}::smallint,
+                  ${credentials.trackingUrlDigest},
+                  ${credentials.trackingUrlKeyVersion}::smallint,
+                  clock_timestamp()
+                FROM app_private.category AS category
+                WHERE category.slug = ${categorySlug} AND category.is_active = true
+                RETURNING id
+              `;
+              if (!rows[0]) return [];
+              const attached = await transaction.menfessPhoto.updateMany({
+                where: { id: photo.id, state: "STAGED", menfessId: null, contentSha256: photo.contentSha256 },
+                data: { menfessId: rows[0].id, state: "ATTACHED", updatedAt: new Date() },
+              });
+              if (attached.count !== 1) throw new Error("Staged photo was not available.");
+              return [{ inserted: true }];
+            })
+          : await database.$queryRaw<Array<{ inserted: boolean }>>`
             INSERT INTO app_private.menfess (
               category_id,
               message,
@@ -133,15 +161,17 @@ export function createPublicMenfessRepository(database: PublicDatabase) {
         }
 
         const [existing] = await database.$queryRaw<
-          Array<{ message: string; category_slug: string; replayable: boolean }>
+          Array<{ message: string; category_slug: string; replayable: boolean; photo_digest: Uint8Array | null }>
         >`
           SELECT
             menfess.message,
             category.slug AS category_slug,
             menfess.submitted_at >= clock_timestamp() - INTERVAL '24 hours'
-              AS replayable
+              AS replayable,
+            photo.content_sha256 AS photo_digest
           FROM app_private.menfess AS menfess
           JOIN app_private.category AS category ON category.id = menfess.category_id
+          LEFT JOIN app_private.menfess_photo AS photo ON photo.menfess_id = menfess.id
           WHERE menfess.tracking_code_digest = ${credentials.trackingCodeDigest}
             AND menfess.tracking_code_key_version = ${credentials.trackingCodeKeyVersion}::smallint
             AND menfess.tracking_url_digest = ${credentials.trackingUrlDigest}
@@ -151,7 +181,11 @@ export function createPublicMenfessRepository(database: PublicDatabase) {
 
         return existing?.replayable === true &&
           existing.message === message &&
-          existing.category_slug === categorySlug
+          existing.category_slug === categorySlug &&
+          (photo
+            ? existing.photo_digest !== null &&
+              Buffer.from(existing.photo_digest).equals(photo.contentSha256)
+            : existing.photo_digest === null)
           ? { kind: "replayed", credentials }
           : { kind: "idempotency-conflict" };
       }

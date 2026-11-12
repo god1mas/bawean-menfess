@@ -9,6 +9,7 @@ type PhotoRow = {
   objectPath: string;
   state: string;
   updatedAt: Date;
+  retentionQueuedAt: Date | null;
 };
 
 function storage() {
@@ -54,16 +55,45 @@ export async function stagePhoto(photo: PreparedPhoto) {
 
 async function claimAndRemove(row: PhotoRow) {
   if (!validPhotoPath(row.objectPath)) throw new Error("Invalid photo object path.");
-  const claim = await prisma.menfessPhoto.updateMany({
-    where: {
-      id: row.id,
-      state: row.state,
-      ...(row.state === "CLEANING"
-        ? { updatedAt: { lt: new Date(Date.now() - 2 * 60 * 60 * 1_000) } }
-        : {}),
-    },
-    data: { state: "CLEANING", updatedAt: new Date() },
-  });
+  const claim = row.state === "RETENTION_PENDING"
+    ? await prisma.$transaction(async (transaction) => {
+        // Lock the parent before the photo, matching moderation and legal-hold
+        // lock order. No Storage call is made while this transaction is open.
+        const eligible = await transaction.$queryRaw<Array<{ id: string }>>`
+          SELECT menfess.id FROM app_private.menfess AS menfess
+          JOIN app_private.menfess_photo AS photo ON photo.menfess_id = menfess.id
+          WHERE photo.id = ${row.id}::uuid AND photo.state = 'RETENTION_PENDING'
+            AND menfess.legal_hold_at IS NULL
+            AND (
+              (menfess.status = 'PENDING' AND menfess.submitted_at <= clock_timestamp() - INTERVAL '90 days')
+              OR (menfess.status = 'APPROVED' AND EXISTS (
+                SELECT 1 FROM app_private.moderation_log AS log
+                WHERE log.menfess_id = menfess.id AND log.action = 'APPROVE'
+                  AND log.created_at <= clock_timestamp() - INTERVAL '90 days'))
+              OR (menfess.status = 'REJECTED' AND EXISTS (
+                SELECT 1 FROM app_private.moderation_log AS log
+                WHERE log.menfess_id = menfess.id AND log.action = 'REJECT'
+                  AND log.created_at <= clock_timestamp() - INTERVAL '90 days'))
+              OR (menfess.status = 'PUBLISHED' AND menfess.published_at <= clock_timestamp() - INTERVAL '365 days')
+            )
+          FOR UPDATE OF menfess
+        `;
+        if (!eligible[0]) return { count: 0 };
+        return transaction.menfessPhoto.updateMany({
+          where: { id: row.id, state: "RETENTION_PENDING" },
+          data: { state: "CLEANING", updatedAt: new Date() },
+        });
+      })
+    : await prisma.menfessPhoto.updateMany({
+        where: {
+          id: row.id,
+          state: row.state,
+          ...(row.state === "CLEANING"
+            ? { updatedAt: { lt: new Date(Date.now() - 2 * 60 * 60 * 1_000) } }
+            : {}),
+        },
+        data: { state: "CLEANING", updatedAt: new Date() },
+      });
   if (claim.count !== 1) return false;
 
   const { error } = await storage().remove([row.objectPath]);
@@ -74,14 +104,22 @@ async function claimAndRemove(row: PhotoRow) {
     });
     throw error;
   }
-  await prisma.menfessPhoto.deleteMany({ where: { id: row.id, state: "CLEANING" } });
+  if (row.retentionQueuedAt) {
+    const completed = await prisma.menfessPhoto.updateMany({
+      where: { id: row.id, state: "CLEANING", retentionQueuedAt: { not: null } },
+      data: { state: "RETENTION_CLEANED", updatedAt: new Date() },
+    });
+    if (completed.count !== 1) throw new Error("Photo retention completion was not recorded.");
+  } else {
+    await prisma.menfessPhoto.deleteMany({ where: { id: row.id, state: "CLEANING" } });
+  }
   return true;
 }
 
 export async function discardStagedPhoto(id: string) {
   const row = await prisma.menfessPhoto.findFirst({
     where: { id, state: "STAGED", menfessId: null },
-    select: { id: true, objectPath: true, state: true, updatedAt: true },
+    select: { id: true, objectPath: true, state: true, updatedAt: true, retentionQueuedAt: true },
   });
   if (row) await claimAndRemove(row);
 }
@@ -89,7 +127,7 @@ export async function discardStagedPhoto(id: string) {
 export async function cleanupPhotoForMenfess(id: string) {
   const row = await prisma.menfessPhoto.findFirst({
     where: { menfessId: id, state: "DELETE_PENDING" },
-    select: { id: true, objectPath: true, state: true, updatedAt: true },
+    select: { id: true, objectPath: true, state: true, updatedAt: true, retentionQueuedAt: true },
   });
   if (row) await claimAndRemove(row);
 }
@@ -99,13 +137,13 @@ export async function reconcilePhotos(limit = 25) {
   const rows = await prisma.menfessPhoto.findMany({
     where: {
       OR: [
-        { state: "DELETE_PENDING" },
+        { state: { in: ["DELETE_PENDING", "RETENTION_PENDING"] } },
         { state: { in: ["STAGED", "CLEANING"] }, updatedAt: { lt: stale } },
       ],
     },
     orderBy: { updatedAt: "asc" },
     take: Math.min(Math.max(limit, 1), 25),
-    select: { id: true, objectPath: true, state: true, updatedAt: true },
+    select: { id: true, objectPath: true, state: true, updatedAt: true, retentionQueuedAt: true },
   });
   let removed = 0;
   let failed = 0;

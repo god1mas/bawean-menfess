@@ -85,6 +85,25 @@ describe("moderation workflow on PostgreSQL 17", () => {
     return { id: stored.id, credentials: result.credentials };
   }
 
+  async function attachedPhoto(label: string) {
+    const photoId = randomUUID();
+    const digest = Uint8Array.from(randomBytes(32));
+    await runtime.$queryRaw`
+      INSERT INTO app_private.menfess_photo
+        (id, object_path, content_type, byte_size, content_sha256, state)
+      VALUES (${photoId}::uuid, ${`photos/${randomUUID()}.png`}, 'image/png', 72, ${digest}, 'STAGED')
+      RETURNING id
+    `;
+    const message = `${prefix} ${label}`;
+    const result = await publicRepository.submitMenfess(
+      "curhat", message, `bmi_${randomBytes(32).toString("base64url")}`,
+      { id: photoId, contentSha256: digest },
+    );
+    expect(result.kind).toBe("created");
+    const menfess = await owner.menfess.findFirstOrThrow({ where: { message } });
+    return { id: menfess.id, photoId };
+  }
+
   it("attaches one private photo and retains it until a terminal moderation commit", async () => {
     const photoId = randomUUID();
     const path = `photos/${randomUUID()}.png`;
@@ -139,6 +158,118 @@ describe("moderation workflow on PostgreSQL 17", () => {
     expect((await runtime.menfessPhoto.findUniqueOrThrow({ where: { id: photoId } })).state).toBe("ATTACHED");
     await moderation.moderate({ id: menfess.id, actorUserId: adminId, action: "REJECT", expectedVersion: 0, reason: "Tidak sesuai aturan." });
     expect((await runtime.menfessPhoto.findUniqueOrThrow({ where: { id: photoId } })).state).toBe("DELETE_PENDING");
+  });
+
+  it("retains due photo records while deleting independent due text records", async () => {
+    const text = await submission("due text retention");
+    const photo = await attachedPhoto("due photo retention");
+    await owner.$executeRaw`
+      UPDATE app_private.menfess SET submitted_at = clock_timestamp() - INTERVAL '91 days'
+      WHERE id IN (${text.id}::uuid, ${photo.id}::uuid)
+    `;
+    await owner.$queryRaw`SELECT * FROM app_private.run_retention_cleanup(500)`;
+    expect(await owner.menfess.findUnique({ where: { id: text.id } })).toBeNull();
+    expect(await owner.menfess.findUnique({ where: { id: photo.id } })).not.toBeNull();
+    expect((await owner.menfessPhoto.findUniqueOrThrow({ where: { id: photo.photoId } })).state).toBe("ATTACHED");
+
+    await expect(runtime.$queryRaw`SELECT app_private.queue_retention_photos(500)`).rejects.toThrow();
+    await owner.$queryRaw`SELECT app_private.queue_retention_photos(500)`;
+    expect((await owner.menfessPhoto.findUniqueOrThrow({ where: { id: photo.photoId } })).state).toBe("RETENTION_PENDING");
+    await expect(runtime.menfessPhoto.updateMany({ where: { id: photo.photoId }, data: { state: "ATTACHED" } })).rejects.toThrow();
+    await expect(moderation.moderate({ id: photo.id, actorUserId: adminId, action: "APPROVE", expectedVersion: 0 })).rejects.toThrow();
+    expect((await owner.menfess.findUniqueOrThrow({ where: { id: photo.id } })).status).toBe("PENDING");
+
+    await owner.$queryRaw`SELECT app_private.set_menfess_legal_hold(${photo.id}::uuid, 'Isolated legal hold test') IS NULL AS result`;
+    expect((await owner.menfessPhoto.findUniqueOrThrow({ where: { id: photo.photoId } })).state).toBe("ATTACHED");
+    await owner.$queryRaw`SELECT * FROM app_private.run_retention_cleanup(500)`;
+    expect(await owner.menfess.findUnique({ where: { id: photo.id } })).not.toBeNull();
+    await owner.$queryRaw`SELECT app_private.release_menfess_legal_hold(${photo.id}::uuid) IS NULL AS result`;
+    await owner.$queryRaw`SELECT app_private.queue_retention_photos(500)`;
+    expect((await runtime.menfessPhoto.updateMany({
+      where: { id: photo.photoId, state: "RETENTION_PENDING" },
+      data: { state: "CLEANING", updatedAt: new Date() },
+    })).count).toBe(1);
+    await expect(owner.$queryRaw`SELECT app_private.set_menfess_legal_hold(${photo.id}::uuid, 'Too late') IS NULL AS result`).rejects.toThrow();
+    await owner.$queryRaw`SELECT * FROM app_private.run_retention_cleanup(500)`;
+    expect(await owner.menfess.findUnique({ where: { id: photo.id } })).not.toBeNull();
+    // The real worker calls Storage.remove first. A tombstone then prevents
+    // moderation until owner retention removes it and the menfess atomically.
+    expect((await runtime.menfessPhoto.updateMany({
+      where: { id: photo.photoId, state: "CLEANING", retentionQueuedAt: { not: null } },
+      data: { state: "RETENTION_CLEANED", updatedAt: new Date() },
+    })).count).toBe(1);
+    await expect(moderation.moderate({ id: photo.id, actorUserId: adminId, action: "APPROVE", expectedVersion: 0 })).rejects.toThrow();
+    await owner.$queryRaw`SELECT app_private.set_menfess_legal_hold(${photo.id}::uuid, 'Preserve remaining data') IS NULL AS result`;
+    await owner.$queryRaw`SELECT * FROM app_private.run_retention_cleanup(500)`;
+    expect(await owner.menfess.findUnique({ where: { id: photo.id } })).not.toBeNull();
+    await owner.$queryRaw`SELECT app_private.release_menfess_legal_hold(${photo.id}::uuid) IS NULL AS result`;
+    await owner.$queryRaw`SELECT * FROM app_private.run_retention_cleanup(500)`;
+    expect(await owner.menfessPhoto.findUnique({ where: { id: photo.photoId } })).toBeNull();
+    expect(await owner.menfess.findUnique({ where: { id: photo.id } })).toBeNull();
+  });
+
+  it("serializes retention queueing against concurrent moderation", async () => {
+    const photo = await attachedPhoto("retention moderation race");
+    await owner.$executeRaw`
+      UPDATE app_private.menfess SET submitted_at = clock_timestamp() - INTERVAL '91 days'
+      WHERE id = ${photo.id}::uuid
+    `;
+    const [moderationResult, queueResult] = await Promise.allSettled([
+      moderation.moderate({ id: photo.id, actorUserId: adminId, action: "APPROVE", expectedVersion: 0 }),
+      owner.$queryRaw`SELECT app_private.queue_retention_photos(500)`,
+    ]);
+    expect(queueResult.status).toBe("fulfilled");
+    const stored = await owner.menfess.findUniqueOrThrow({ where: { id: photo.id } });
+    const storedPhoto = await owner.menfessPhoto.findUniqueOrThrow({ where: { id: photo.photoId } });
+    if (moderationResult.status === "fulfilled") {
+      expect(stored.status).toBe("APPROVED");
+      expect(storedPhoto.state).toBe("ATTACHED");
+      expect(await owner.moderationLog.count({ where: { menfessId: photo.id } })).toBe(1);
+    } else {
+      expect(stored.status).toBe("PENDING");
+      expect(storedPhoto.state).toBe("RETENTION_PENDING");
+      expect(await owner.moderationLog.count({ where: { menfessId: photo.id } })).toBe(0);
+    }
+  });
+
+  it("keeps photo retention functions owner-only and the photo table private", async () => {
+    const [security] = await owner.$queryRaw<Array<{
+      photo_rls: boolean;
+      queue_owner: string;
+      queue_definer: boolean;
+      queue_search_path: string[];
+      runtime_queue_execute: boolean;
+      anon_queue_execute: boolean;
+      runtime_photo_truncate: boolean;
+      anon_photo_select: boolean;
+    }>>`
+      SELECT
+        table_class.relrowsecurity AS photo_rls,
+        function_owner.rolname AS queue_owner,
+        procedure.prosecdef AS queue_definer,
+        procedure.proconfig AS queue_search_path,
+        pg_catalog.has_function_privilege('bawean_app', procedure.oid, 'EXECUTE') AS runtime_queue_execute,
+        pg_catalog.has_function_privilege('anon', procedure.oid, 'EXECUTE') AS anon_queue_execute,
+        pg_catalog.has_table_privilege('bawean_app', table_class.oid, 'TRUNCATE') AS runtime_photo_truncate,
+        pg_catalog.has_table_privilege('anon', table_class.oid, 'SELECT') AS anon_photo_select
+      FROM pg_catalog.pg_class AS table_class
+      JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_class.relnamespace
+      JOIN pg_catalog.pg_proc AS procedure ON procedure.proname = 'queue_retention_photos'
+      JOIN pg_catalog.pg_namespace AS function_namespace ON function_namespace.oid = procedure.pronamespace
+      JOIN pg_catalog.pg_roles AS function_owner ON function_owner.oid = procedure.proowner
+      WHERE table_namespace.nspname = 'app_private' AND table_class.relname = 'menfess_photo'
+        AND function_namespace.nspname = 'app_private'
+    `;
+    expect(security).toMatchObject({
+      photo_rls: true,
+      queue_owner: "postgres",
+      queue_definer: true,
+      queue_search_path: ['search_path=""'],
+      runtime_queue_execute: false,
+      anon_queue_execute: false,
+      runtime_photo_truncate: false,
+      anon_photo_select: false,
+    });
   });
 
   it("approves and publishes with matching append-only audit history and tracking state", async () => {

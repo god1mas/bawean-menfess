@@ -151,7 +151,8 @@ model MenfessPhoto {
   contentType   String   @map("content_type") @db.VarChar(16)
   byteSize      Int      @map("byte_size")
   contentSha256 Bytes    @map("content_sha256") @db.ByteA
-  state         String   @db.VarChar(16)
+  state         String   @db.VarChar(20)
+  retentionQueuedAt DateTime? @map("retention_queued_at") @db.Timestamptz(6)
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
   menfess       Menfess? @relation(fields: [menfessId], references: [id], onDelete: Restrict)
